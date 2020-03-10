@@ -10,21 +10,25 @@ fn main() -> pct_str::Result<()> {
 	let pct_str = PctStr::new(buffer)?;
 
 	// You can compare percent-encoded strings with a regular string.
-	assert!(pct_str == "Hello World!");
+	assert!(pct_str == "Hello World!"); // => true
 
 	// The underlying string is unchanged.
-	assert!(pct_str.as_str() == "Hello%20World%21");
+	assert!(pct_str.as_str() == "Hello%20World%21"); // => true
 
 	// Just as a regular string, you can iterate over the
 	// encoded characters of `pct_str` with [`PctStr::chars`].
 	for c in pct_str.chars() {
-		println!("{}", c);
+		print!("{}", c);
 	}
+	// => Hello World!
+
+	println!("");
 
 	// You can decode the string and every remove percent-encoded characters
 	// with the [`PctStr::decode`] method.
 	let decoded_string: String = pct_str.decode();
 	println!("{}", decoded_string);
+	// => Hello World!
 
 	Ok(())
 }
