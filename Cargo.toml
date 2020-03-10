@@ -1,5 +1,12 @@
 [package]
 name = "pct-str"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Timothée Haudebourg <author@haudebourg.net>"]
 edition = "2018"
+categories = ["parsing"]
+keywords = ["percent", "percent-encoded", "pct", "encode", "decode", "string"]
+description = "Percent-encoded strings for URL, URI, IRI, etc."
+repository = "https://github.com/timothee-haudebourg/pct-str"
+documentation = "https://docs.rs/pct-str"
+license = "MIT/Apache-2.0"
+readme = "README.md"

@@ -1,7 +1,60 @@
+//! Percent-encoded strings manipulation.
+//!
+//! This crate provides two types, [`PctStr`] and [`PctString`], similar to [`str`] and [`String`],
+//! representing percent-encoded strings used in URL, URI, IRI, etc.
+//! You can use them to encode, decode and compare percent-encoded strings.
+//!
+//! # Basic usage
+//!
+//! You can parse/decode percent-encoded strings by building [`PctStr`] slice over a [`str`] slice.
+//!
+//! ```
+//! use pct_str::PctStr;
+//!
+//! let pct_str = PctStr::new("Hello%20World%21")?;
+//!
+//! assert!(pct_str == "Hello World!");
+//!
+//! let decoded_string: String = pct_str.decode();
+//! println!("{}", decoded_string); // => Hello World!
+//! ```
+//!
+//! To create new percent-encoded strings, use the [`PctString`] to copy or encode new strings.
+//!
+//! ```
+//! use pct_str::PctString;
+//!
+//! // Copy the given percent-encoded string.
+//! let pct_string = PctString::new("Hello%20World%21")?;
+//!
+//! // Encode the given regular string.
+//! let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
+//!
+//! println!("{}", pct_string.as_str()); // => Hello World%21
+//! ```
+//!
+//! You can choose which character will be percent-encoded by the `encode` function
+//! by implementing the [`Encoder`] trait.
+//!
+//! ```
+//! struct CustomEncoder;
+//!
+//! impl pct_str::Encoder for CustomEncoder {
+//! 	fn encode(&self, c: char) -> bool {
+//! 		URIReserved.encode(c) || c.is_uppercase()
+//! 	}
+//! }
+//!
+//! let pct_string = PctString::encode("Hello World!".chars(), CustomEncoder);
+//! println!("{}", pct_string.as_str()); // => %48ello %57orld%21
+//! ```
+
 use std::hash;
 use std::fmt;
 
-/// Error raised when a given input string is not percent-encoded as expected.
+/// Encoding error.
+///
+/// Raised when a given input string is not percent-encoded as expected.
 #[derive(Debug)]
 pub struct InvalidEncoding;
 
@@ -34,6 +87,9 @@ pub fn is_pct_encoded(str: &str) -> bool {
 	true
 }
 
+/// Characters iterator.
+///
+/// Iterates over the encoded characters of a percent-encoded string.
 pub struct Chars<'a> {
 	inner: std::str::Chars<'a>
 }
@@ -57,23 +113,62 @@ impl<'a> Iterator for Chars<'a> {
 
 impl<'a> std::iter::FusedIterator for Chars<'a> { }
 
-/// Percent-Encoded string
-pub struct PctStr<'a> {
-	data: &'a str
+/// Percent-Encoded string slice.
+///
+/// This is the equivalent of [`str`] for percent-encoded strings.
+/// This is an *unsized* type, meaning that it must always be used behind a
+/// pointer like `&` or [`Box`]. For an owned version of this type,
+/// see [`PctString`].
+///
+/// # Examples
+///
+/// ```
+/// let buffer = "Hello%20World%21";
+/// let pct_str = PctStr::new(buffer)?;
+///
+/// // You can compare percent-encoded strings with a regular string.
+/// assert!(pct_str == "Hello World!");
+///
+/// // The underlying string is unchanged.
+/// assert!(pct_str.as_str() == "Hello%20World%21");
+///
+/// // Just as a regular string, you can iterate over the
+/// // encoded characters of `pct_str` with [`PctStr::chars`].
+/// for c in pct_str.chars() {
+/// 	print!("{}", c);
+/// }
+///
+/// // You can decode the string and every remove percent-encoded characters
+/// // with the [`PctStr::decode`] method.
+/// let decoded_string: String = pct_str.decode();
+/// println!("{}", decoded_string);
+/// ```
+pub struct PctStr {
+	data: str
 }
 
-impl<'a> PctStr<'a> {
-	pub fn new<S: AsRef<str> + ?Sized>(str: &'a S) -> Result<PctStr<'a>> {
+impl PctStr {
+	/// Create a new percent-encoded string slice.
+	///
+	/// The input slice is checked for correct percent-encoding.
+	/// If the test fails, a [`InvalidEncoding`] error is returned.
+	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<&PctStr> {
 		if is_pct_encoded(str.as_ref()) {
-			Ok(PctStr {
-				data: str.as_ref()
-			})
+			Ok(unsafe { PctStr::new_unchecked(str) })
 		} else {
 			Err(InvalidEncoding)
 		}
 	}
 
-	/// Length of the string, in bytes.
+	/// Create a new percent-encoded string slice without checking for correct encoding.
+	///
+	/// This is an unsafe function. The resulting string slice will have an undefined behaviour
+	/// if the input slice is not percent-encoded.
+	pub unsafe fn new_unchecked<S: AsRef<str> + ?Sized>(str: &S) -> &PctStr {
+		&*(str.as_ref() as *const str as *const PctStr)
+	}
+
+	/// Length of the string slice, in bytes.
 	///
 	/// Note that two percent-encoded strings with different lengths may
 	/// represent the same string.
@@ -82,12 +177,13 @@ impl<'a> PctStr<'a> {
 		self.data.len()
 	}
 
-	/// Get the underlying Percent-Encoded string.
+	/// Get the underlying percent-encoded string slice.
 	#[inline]
 	pub fn as_str(&self) -> &str {
-		self.data
+		&self.data
 	}
 
+	/// Iterate over the encoded characters of the string.
 	#[inline]
 	pub fn chars(&self) -> Chars {
 		Chars {
@@ -95,6 +191,9 @@ impl<'a> PctStr<'a> {
 		}
 	}
 
+	/// Decoding.
+	///
+	/// Return the string with the percent-encoded characters decoded.
 	pub fn decode(&self) -> String {
 		let mut decoded = String::with_capacity(self.len());
 		for c in self.chars() {
@@ -105,9 +204,9 @@ impl<'a> PctStr<'a> {
 	}
 }
 
-impl<'a> PartialEq for PctStr<'a> {
+impl PartialEq for PctStr {
 	#[inline]
-	fn eq(&self, other: &PctStr<'a>) -> bool {
+	fn eq(&self, other: &PctStr) -> bool {
 		let mut a = self.chars();
 		let mut b = other.chars();
 
@@ -125,11 +224,11 @@ impl<'a> PartialEq for PctStr<'a> {
 	}
 }
 
-impl<'a> Eq for PctStr<'a> { }
+impl Eq for PctStr { }
 
-impl<'a> PartialEq<&'a str> for PctStr<'a> {
+impl PartialEq<str> for PctStr {
 	#[inline]
-	fn eq(&self, other: &&'a str) -> bool {
+	fn eq(&self, other: &str) -> bool {
 		let mut a = self.chars();
 		let mut b = other.chars();
 
@@ -147,7 +246,7 @@ impl<'a> PartialEq<&'a str> for PctStr<'a> {
 	}
 }
 
-impl<'a> PartialEq<PctString> for PctStr<'a> {
+impl PartialEq<PctString> for PctStr {
 	#[inline]
 	fn eq(&self, other: &PctString) -> bool {
 		let mut a = self.chars();
@@ -167,7 +266,7 @@ impl<'a> PartialEq<PctString> for PctStr<'a> {
 	}
 }
 
-impl<'a> hash::Hash for PctStr<'a> {
+impl hash::Hash for PctStr {
 	#[inline]
 	fn hash<H: hash::Hasher>(&self, hasher: &mut H) {
 		for c in self.chars() {
@@ -176,18 +275,47 @@ impl<'a> hash::Hash for PctStr<'a> {
 	}
 }
 
-impl<'a> fmt::Display for PctStr<'a> {
+impl fmt::Display for PctStr {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		fmt::Display::fmt(self.data, f)
+		fmt::Display::fmt(&self.data, f)
 	}
 }
 
-impl<'a> fmt::Debug for PctStr<'a> {
+impl fmt::Debug for PctStr {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		fmt::Debug::fmt(self.data, f)
+		fmt::Debug::fmt(&self.data, f)
 	}
 }
 
+/// Encoding predicate.
+///
+/// Instances of this trait are used along with the [`encode`](`PctString::encode`) function
+/// to decide which character must be percent-encoded.
+///
+/// This crate provides a simple implementation of the trait, [`URIReserved`]
+/// encoding characters reserved in the URI syntax.
+///
+/// # Example
+///
+/// ```
+/// let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
+/// println!("{}", pct_string.as_str()); // => Hello World%21
+/// ```
+///
+/// Custom encoder implementation:
+///
+/// ```
+/// struct CustomEncoder;
+///
+/// impl pct_str::Encoder for CustomEncoder {
+/// 	fn encode(&self, c: char) -> bool {
+/// 		URIReserved.encode(c) || c.is_uppercase()
+/// 	}
+/// }
+///
+/// let pct_string = PctString::encode("Hello World!".chars(), CustomEncoder);
+/// println!("{}", pct_string.as_str()); // => %48ello %57orld%21
+/// ```
 pub trait Encoder {
 	/// Decide if the given character must be encoded.
 	///
@@ -196,11 +324,16 @@ pub trait Encoder {
 	fn encode(&self, c: char) -> bool;
 }
 
+/// Owned, mutable percent-encoded string.
+///
+/// This is the equivalent of [`String`] for percent-encoded strings.
+/// It implements [`Deref`] to [`PctStr`] meaning that all methods on [`PctStr`] slices are
+/// available on `PctString` values as well.
 pub struct PctString {
 	data: String
 }
 
-pub unsafe fn to_hex_digit(b: u32) -> char {
+unsafe fn to_hex_digit(b: u32) -> char {
 	if b < 10 {
 		std::char::from_u32_unchecked(b + 0x30)
 	} else {
@@ -209,6 +342,10 @@ pub unsafe fn to_hex_digit(b: u32) -> char {
 }
 
 impl PctString {
+	/// Create a new owned percent-encoded string.
+	///
+	/// The input slice is checked for correct percent-encoding and copied.
+	/// If the test fails, a [`InvalidEncoding`] error is returned.
 	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<PctString> {
 		if is_pct_encoded(str.as_ref()) {
 			Ok(PctString {
@@ -219,7 +356,17 @@ impl PctString {
 		}
 	}
 
-	/// Encode a string.
+	/// Encode a string into a percent-encoded string.
+	///
+	/// This function takes an [`Encoder`] instance to decide which character of the string must
+	/// be encoded.
+	///
+	/// # Example
+	///
+	/// ```
+	/// let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
+	/// println!("{}", pct_string.as_str()); // => Hello World%21
+	/// ```
 	pub fn encode<I: Iterator<Item = char>, E: Encoder>(src: I, encoder: E) -> PctString {
 		let mut encoded = String::new();
 		for c in src {
@@ -242,30 +389,20 @@ impl PctString {
 		}
 	}
 
-	/// Get the underlying Percent-Encoded string.
+	/// Return this string as a borrowed percent-encoded string slice.
 	#[inline]
-	pub fn as_str(&self) -> &str {
-		self.data.as_ref()
+	pub fn as_pct_str(&self) -> &PctStr {
+		unsafe { PctStr::new_unchecked(&self.data) }
 	}
+}
+
+impl std::ops::Deref for PctString {
+	type Target = PctStr;
 
 	#[inline]
-	pub fn as_pct_str(&self) -> PctStr {
-		PctStr {
-			data: self.data.as_ref()
-		}
-	}
-
-	#[inline]
-	pub fn decode(&self) -> String {
-		self.as_pct_str().decode()
-	}
-
-	#[inline]
-	pub fn chars(&self) -> Chars {
-		Chars {
-			inner: self.data.chars()
-		}
-	}
+	fn deref(&self) -> &PctStr {
+        self.as_pct_str()
+    }
 }
 
 impl PartialEq for PctString {
@@ -290,9 +427,9 @@ impl PartialEq for PctString {
 
 impl Eq for PctString { }
 
-impl<'a> PartialEq<PctStr<'a>> for PctString {
+impl PartialEq<PctStr> for PctString {
 	#[inline]
-	fn eq(&self, other: &PctStr<'a>) -> bool {
+	fn eq(&self, other: &PctStr) -> bool {
 		let mut a = self.chars();
 		let mut b = other.chars();
 
@@ -310,9 +447,9 @@ impl<'a> PartialEq<PctStr<'a>> for PctString {
 	}
 }
 
-impl<'a> PartialEq<&'a str> for PctString {
+impl PartialEq<str> for PctString {
 	#[inline]
-	fn eq(&self, other: &&'a str) -> bool {
+	fn eq(&self, other: &str) -> bool {
 		let mut a = self.chars();
 		let mut b = other.chars();
 
@@ -351,9 +488,13 @@ impl fmt::Debug for PctString {
 	}
 }
 
-pub struct URLReserved;
+/// URL-reserved characters encoder.
+///
+/// This [`Encoder`] encodes characters that are reserved in the syntax of URI according to
+/// [RFC 3986](https://tools.ietf.org/html/rfc3986).
+pub struct URIReserved;
 
-impl Encoder for URLReserved {
+impl Encoder for URIReserved {
 	fn encode(&self, c: char) -> bool {
 		match c {
 			'!' | '#' | '$' | '%' | '&' | '\'' |
