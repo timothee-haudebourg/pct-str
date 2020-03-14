@@ -6,7 +6,7 @@
 //!
 //! # Basic usage
 //!
-//! You can parse/decode percent-encoded strings by building [`PctStr`] slice over a [`str`] slice.
+//! You can parse/decode percent-encoded strings by building a [`PctStr`] slice over a [`str`] slice.
 //!
 //! ```
 //! use pct_str::PctStr;
@@ -51,6 +51,7 @@
 
 use std::hash;
 use std::fmt;
+use std::cmp::{PartialOrd, Ord, Ordering};
 
 /// Encoding error.
 ///
@@ -266,6 +267,40 @@ impl PartialEq<PctString> for PctStr {
 	}
 }
 
+impl PartialOrd for PctStr {
+	fn partial_cmp(&self, other: &PctStr) -> Option<Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+impl Ord for PctStr {
+	fn cmp(&self, other: &PctStr) -> Ordering {
+		let mut self_chars = self.chars();
+		let mut other_chars = other.chars();
+
+		loop {
+			match (self_chars.next(), other_chars.next()) {
+				(None, None) => return Ordering::Equal,
+				(None, Some(_)) => return Ordering::Less,
+				(Some(_), None) => return Ordering::Greater,
+				(Some(a), Some(b)) => {
+					match a.cmp(&b) {
+						Ordering::Less => return Ordering::Less,
+						Ordering::Greater => return Ordering::Greater,
+						Ordering::Equal => ()
+					}
+				}
+			}
+		}
+	}
+}
+
+impl PartialOrd<PctString> for PctStr {
+	fn partial_cmp(&self, other: &PctString) -> Option<Ordering> {
+		self.partial_cmp(other.as_pct_str())
+	}
+}
+
 impl hash::Hash for PctStr {
 	#[inline]
 	fn hash<H: hash::Hasher>(&self, hasher: &mut H) {
@@ -327,7 +362,7 @@ pub trait Encoder {
 /// Owned, mutable percent-encoded string.
 ///
 /// This is the equivalent of [`String`] for percent-encoded strings.
-/// It implements [`Deref`] to [`PctStr`] meaning that all methods on [`PctStr`] slices are
+/// It implements [`Deref`](`std::ops::Deref`) to [`PctStr`] meaning that all methods on [`PctStr`] slices are
 /// available on `PctString` values as well.
 pub struct PctString {
 	data: String
@@ -467,6 +502,18 @@ impl PartialEq<str> for PctString {
 	}
 }
 
+impl PartialOrd for PctString {
+	fn partial_cmp(&self, other: &PctString) -> Option<Ordering> {
+		self.as_pct_str().partial_cmp(other.as_pct_str())
+	}
+}
+
+impl PartialOrd<PctStr> for PctString {
+	fn partial_cmp(&self, other: &PctStr) -> Option<Ordering> {
+		self.as_pct_str().partial_cmp(other)
+	}
+}
+
 impl hash::Hash for PctString {
 	#[inline]
 	fn hash<H: hash::Hasher>(&self, hasher: &mut H) {
@@ -488,7 +535,7 @@ impl fmt::Debug for PctString {
 	}
 }
 
-/// URL-reserved characters encoder.
+/// URI-reserved characters encoder.
 ///
 /// This [`Encoder`] encodes characters that are reserved in the syntax of URI according to
 /// [RFC 3986](https://tools.ietf.org/html/rfc3986).
