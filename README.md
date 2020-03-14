@@ -12,7 +12,7 @@ You can use them to encode, decode and compare percent-encoded strings.
 
 ## Basic usage
 
-You can parse/decode percent-encoded strings by building `PctStr` slice over a `str` slice.
+You can parse/decode percent-encoded strings by building a `PctStr` slice over a `str` slice.
 
 ```rust
 use pct_str::PctStr;
