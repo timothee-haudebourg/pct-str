@@ -488,9 +488,9 @@ impl PartialEq<PctStr> for PctString {
 	}
 }
 
-impl PartialEq<str> for PctString {
+impl PartialEq<&str> for PctString {
 	#[inline]
-	fn eq(&self, other: &str) -> bool {
+	fn eq(&self, other: &&str) -> bool {
 		let mut a = self.chars();
 		let mut b = other.chars();
 
@@ -505,6 +505,13 @@ impl PartialEq<str> for PctString {
 		}
 
 		true
+	}
+}
+
+impl PartialEq<str> for PctString {
+	#[inline]
+	fn eq(&self, other: &str) -> bool {
+		self.eq(&other)
 	}
 }
 
