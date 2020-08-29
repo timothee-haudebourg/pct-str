@@ -429,6 +429,12 @@ impl PctString {
 	pub fn as_pct_str(&self) -> &PctStr {
 		unsafe { PctStr::new_unchecked(&self.data) }
 	}
+
+	/// Return the internal string of the [`PctString`], consuming it
+	#[inline]
+	pub fn into_string(self) -> String {
+		self.data
+	}
 }
 
 impl std::ops::Deref for PctString {
