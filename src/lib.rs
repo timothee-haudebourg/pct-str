@@ -11,7 +11,7 @@
 //! ```
 //! use pct_str::PctStr;
 //!
-//! let pct_str = PctStr::new("Hello%20World%21")?;
+//! let pct_str = PctStr::new("Hello%20World%21").unwrap();
 //!
 //! assert!(pct_str == "Hello World!");
 //!
@@ -22,10 +22,10 @@
 //! To create new percent-encoded strings, use the [`PctString`] to copy or encode new strings.
 //!
 //! ```
-//! use pct_str::PctString;
+//! use pct_str::{PctString, URIReserved};
 //!
 //! // Copy the given percent-encoded string.
-//! let pct_string = PctString::new("Hello%20World%21")?;
+//! let pct_string = PctString::new("Hello%20World%21").unwrap();
 //!
 //! // Encode the given regular string.
 //! let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
@@ -37,6 +37,8 @@
 //! by implementing the [`Encoder`] trait.
 //!
 //! ```
+//! use pct_str::{URIReserved, PctString};
+//!
 //! struct CustomEncoder;
 //!
 //! impl pct_str::Encoder for CustomEncoder {
@@ -124,8 +126,10 @@ impl<'a> std::iter::FusedIterator for Chars<'a> { }
 /// # Examples
 ///
 /// ```
+/// use pct_str::PctStr;
+///
 /// let buffer = "Hello%20World%21";
-/// let pct_str = PctStr::new(buffer)?;
+/// let pct_str = PctStr::new(buffer).unwrap();
 ///
 /// // You can compare percent-encoded strings with a regular string.
 /// assert!(pct_str == "Hello World!");
@@ -333,6 +337,8 @@ impl fmt::Debug for PctStr {
 /// # Example
 ///
 /// ```
+/// use pct_str::{PctString, URIReserved};
+///
 /// let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
 /// println!("{}", pct_string.as_str()); // => Hello World%21
 /// ```
@@ -340,6 +346,8 @@ impl fmt::Debug for PctStr {
 /// Custom encoder implementation:
 ///
 /// ```
+/// use pct_str::{PctString, URIReserved};
+///
 /// struct CustomEncoder;
 ///
 /// impl pct_str::Encoder for CustomEncoder {
@@ -399,6 +407,8 @@ impl PctString {
 	/// # Example
 	///
 	/// ```
+	/// use pct_str::{PctString, URIReserved};
+	///
 	/// let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
 	/// println!("{}", pct_string.as_str()); // => Hello World%21
 	/// ```
