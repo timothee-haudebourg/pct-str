@@ -89,19 +89,46 @@ pub fn is_pct_encoded(str: &str) -> bool {
 /// Iterates over the encoded characters of a percent-encoded string.
 pub struct Chars<'a> {
     inner: std::str::Chars<'a>,
+    buf: Vec<u8>,
+    next: Option<char>,
 }
 
 impl<'a> Iterator for Chars<'a> {
     type Item = char;
 
     fn next(&mut self) -> Option<char> {
+        if let Some(value) = self.next.take() {
+            return Some(value);
+        }
+
+        fn cb(buf: &mut Vec<u8>) -> char {
+            let result = std::str::from_utf8(&buf)
+                .unwrap_or("\u{fffd}")
+                .chars()
+                .next()
+                .unwrap();
+            buf.clear();
+            result
+        };
+
         match self.inner.next() {
             Some('%') => {
                 let a = self.inner.next().unwrap().to_digit(16).unwrap();
                 let b = self.inner.next().unwrap().to_digit(16).unwrap();
-                let codepoint = (a << 4 | b) as u32;
-                Some(unsafe { std::char::from_u32_unchecked(codepoint) })
+                let byte = (a << 4 | b) as u8;
+                self.buf.push(byte);
+
+                if self.buf.len() == 4 {
+                    return Some(cb(&mut self.buf));
+                }
+
+                self.next()
             }
+            Some(c) if !self.buf.is_empty() => {
+                self.next = Some(c);
+                Some(cb(&mut self.buf))
+            }
+            None if !self.buf.is_empty() => Some(cb(&mut self.buf)),
             Some(c) => Some(c),
             None => None,
         }
@@ -187,6 +214,8 @@ impl PctStr {
     pub fn chars(&self) -> Chars {
         Chars {
             inner: self.data.chars(),
+            buf: vec![],
+            next: None,
         }
     }
 
@@ -368,14 +397,6 @@ pub struct PctString {
     data: String,
 }
 
-unsafe fn to_hex_digit(b: u32) -> char {
-    if b < 10 {
-        std::char::from_u32_unchecked(b + 0x30)
-    } else {
-        std::char::from_u32_unchecked(b + 0x37)
-    }
-}
-
 impl PctString {
     /// Create a new owned percent-encoded string.
     ///
@@ -405,16 +426,16 @@ impl PctString {
     /// println!("{}", pct_string.as_str()); // => Hello World%21
     /// ```
     pub fn encode<I: Iterator<Item = char>, E: Encoder>(src: I, encoder: E) -> PctString {
+        use std::fmt::Write;
+
+        let mut buf = String::with_capacity(4);
         let mut encoded = String::new();
         for c in src {
-            let codepoint = c as u32;
-            if c == '%' || (codepoint <= 0xff && encoder.encode(c)) {
-                let a = (codepoint >> 4) & 0xf;
-                let b = codepoint & 0xf;
-                encoded.push('%');
-                unsafe {
-                    encoded.push(to_hex_digit(a));
-                    encoded.push(to_hex_digit(b));
+            if encoder.encode(c) {
+                buf.clear();
+                buf.push(c);
+                for byte in buf.bytes() {
+                    write!(encoded, "%{:02X}", byte).unwrap();
                 }
             } else {
                 encoded.push(c);
@@ -561,5 +582,147 @@ impl Encoder for URIReserved {
             | '=' | '?' | '@' | '[' | ']' => true,
             _ => false,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IriSegmentKind {
+    Segment,
+    SegmentNoColons,
+    Fragment,
+    Query,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct IriReserved(IriSegmentKind);
+
+impl Encoder for IriReserved {
+    fn encode(&self, c: char) -> bool {
+        // iunreserved
+        if c.is_ascii_alphanumeric() {
+            return false;
+        }
+
+        match c {
+            // ipchar
+            '@' => return false,
+            // iunreserved
+            '-' | '.' | '_' | '~' => return false,
+            // sub-delims
+            '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=' => return false,
+            '/' | '?' => {
+                return self.0 != IriSegmentKind::Query && self.0 != IriSegmentKind::Fragment
+            }
+            ':' => return self.0 == IriSegmentKind::SegmentNoColons,
+            _ => { /* fall through */ }
+        }
+
+        match c as u32 {
+            // ucschar
+            0xA0..=0xD7FF
+            | 0xF900..=0xFDCF
+            | 0xFDF0..=0xFFEF
+            | 0x10000..=0x1FFFD
+            | 0x20000..=0x2FFFD
+            | 0x30000..=0x3FFFD
+            | 0x40000..=0x4FFFD
+            | 0x50000..=0x5FFFD
+            | 0x60000..=0x6FFFD
+            | 0x70000..=0x7FFFD
+            | 0x80000..=0x8FFFD
+            | 0x90000..=0x9FFFD
+            | 0xA0000..=0xAFFFD
+            | 0xB0000..=0xBFFFD
+            | 0xC0000..=0xCFFFD
+            | 0xD0000..=0xDFFFD
+            | 0xE1000..=0xEFFFD => false,
+            // iprivate
+            0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD => {
+                self.0 != IriSegmentKind::Query
+            }
+            _ => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iri_encode_cyrillic() {
+        let encoder = IriReserved(IriSegmentKind::Segment);
+        let pct_string = PctString::encode("традиционное польское блюдо".chars(), encoder);
+        assert_eq!(&pct_string, &"традиционное польское блюдо");
+        assert_eq!(&pct_string.as_str(), &"традиционное%20польское%20блюдо");
+    }
+
+    #[test]
+    fn iri_encode_segment() {
+        let encoder = IriReserved(IriSegmentKind::Segment);
+        let pct_string = PctString::encode(
+            "?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+            encoder,
+        );
+
+        assert_eq!(
+            &pct_string,
+            &"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+        );
+        assert_eq!(
+            &pct_string.as_str(),
+            &"%3Ftest=традиционное%20польское%20блюдо&cjk=真正&private=%F4%8F%BF%BD"
+        );
+    }
+
+    #[test]
+    fn iri_encode_segment_nocolon() {
+        let encoder = IriReserved(IriSegmentKind::SegmentNoColons);
+        let pct_string = PctString::encode(
+            "?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+            encoder,
+        );
+        assert_eq!(
+            &pct_string,
+            &"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+        );
+        assert_eq!(
+            &pct_string.as_str(),
+            &"%3Ftest=традиционное%20польское%20блюдо&cjk=真正&private=%F4%8F%BF%BD"
+        );
+    }
+
+    #[test]
+    fn iri_encode_fragment() {
+        let encoder = IriReserved(IriSegmentKind::Fragment);
+        let pct_string = PctString::encode(
+            "?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+            encoder,
+        );
+        assert_eq!(
+            &pct_string,
+            &"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+        );
+        assert_eq!(
+            &pct_string.as_str(),
+            &"?test=традиционное%20польское%20блюдо&cjk=真正&private=%F4%8F%BF%BD"
+        );
+    }
+
+    #[test]
+    fn iri_encode_query() {
+        let encoder = IriReserved(IriSegmentKind::Query);
+        let pct_string = PctString::encode(
+            "?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+            encoder,
+        );
+        assert_eq!(
+            &pct_string,
+            &"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+        );
+        assert_eq!(
+            &pct_string.as_str(),
+            &"?test=традиционное%20польское%20блюдо&cjk=真正&private=\u{10FFFD}"
+        );
     }
 }
