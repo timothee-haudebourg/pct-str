@@ -51,38 +51,108 @@
 //! println!("{}", pct_string.as_str()); // => %48ello %57orld%21
 //! ```
 
-use std::cmp::{Ord, Ordering, PartialOrd};
 use std::fmt;
 use std::hash;
+use std::{
+    cmp::{Ord, Ordering, PartialOrd},
+    fmt::Display,
+};
 
 /// Encoding error.
 ///
 /// Raised when a given input string is not percent-encoded as expected.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InvalidEncoding;
+
+impl Display for InvalidEncoding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid encoding")
+    }
+}
+
+impl std::error::Error for InvalidEncoding {}
 
 /// Result of a function performing a percent-encoding check.
 pub type Result<T> = std::result::Result<T, InvalidEncoding>;
 
-/// Checks if a string is a correct percent-encoded string.
-pub fn is_pct_encoded(str: &str) -> bool {
-    let mut chars = str.chars();
-    loop {
-        match chars.next() {
-            Some('%') => match chars.next() {
-                Some(c) if c.is_digit(16) => match chars.next() {
-                    Some(c) if c.is_digit(16) => break,
-                    _ => return false,
-                },
-                _ => return false,
-            },
-            Some(_) => (),
-            None => break,
+/// Bytes iterator.
+///
+/// Iterates over the encoded bytes of a percent-encoded string.
+pub struct Bytes<'a> {
+    inner: std::str::Bytes<'a>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ByteError {
+    InvalidByte(u8),
+    IncompleteEncoding,
+}
+
+impl From<ByteError> for std::io::Error {
+    fn from(e: ByteError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+    }
+}
+
+impl Display for ByteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ByteError::InvalidByte(b) => write!(f, "Invalid UTF-8 byte: {:#x}", b),
+            ByteError::IncompleteEncoding => f.write_str("Incomplete percent-encoding segment"),
         }
     }
-
-    true
 }
+
+impl std::error::Error for ByteError {}
+
+#[inline(always)]
+fn to_digit(b: u8) -> std::result::Result<u8, ByteError> {
+    match b {
+        // ASCII 0..=9
+        0x30..=0x39 => Ok(b - 0x30),
+        // ASCII A..=F
+        0x41..=0x46 => Ok(b - 0x37),
+        // ASCII a..=f
+        0x61..=0x66 => Ok(b - 0x57),
+        _ => Err(ByteError::InvalidByte(b)),
+    }
+}
+
+impl<'a> Bytes<'a> {
+    fn try_next(&mut self, next: u8) -> std::result::Result<u8, ByteError> {
+        match next {
+            b'%' => {
+                let a = self
+                    .inner
+                    .next()
+                    .ok_or_else(|| ByteError::IncompleteEncoding)?;
+                let a = to_digit(a)?;
+                let b = self
+                    .inner
+                    .next()
+                    .ok_or_else(|| ByteError::IncompleteEncoding)?;
+                let b = to_digit(b)?;
+                let byte = (a << 4 | b) as u8;
+                Ok(byte)
+            }
+            _ => Ok(next),
+        }
+    }
+}
+
+impl<'a> Iterator for Bytes<'a> {
+    type Item = std::result::Result<u8, ByteError>;
+
+    fn next(&mut self) -> Option<std::result::Result<u8, ByteError>> {
+        if let Some(b) = self.inner.next() {
+            Some(self.try_next(b))
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> std::iter::FusedIterator for Bytes<'a> {}
 
 /// Characters iterator.
 ///
@@ -93,6 +163,16 @@ pub struct Chars<'a> {
     next: Option<char>,
 }
 
+impl<'a> Chars<'a> {
+    fn new(chars: std::str::Chars<'a>) -> Self {
+        Self {
+            inner: chars,
+            buf: Vec::with_capacity(4),
+            next: None,
+        }
+    }
+}
+
 impl<'a> Iterator for Chars<'a> {
     type Item = char;
 
@@ -101,12 +181,9 @@ impl<'a> Iterator for Chars<'a> {
             return Some(value);
         }
 
-        fn cb(buf: &mut Vec<u8>) -> char {
-            let result = std::str::from_utf8(&buf)
-                .unwrap_or("\u{fffd}")
-                .chars()
-                .next()
-                .unwrap();
+        fn process_buf(buf: &mut Vec<u8>) -> char {
+            // This is safe because PctStr guarantees percent-encoded parts are valid UTF-8.
+            let result = std::str::from_utf8(&buf).unwrap().chars().next().unwrap();
             buf.clear();
             result
         };
@@ -119,16 +196,16 @@ impl<'a> Iterator for Chars<'a> {
                 self.buf.push(byte);
 
                 if self.buf.len() == 4 {
-                    return Some(cb(&mut self.buf));
+                    return Some(process_buf(&mut self.buf));
                 }
 
                 self.next()
             }
             Some(c) if !self.buf.is_empty() => {
                 self.next = Some(c);
-                Some(cb(&mut self.buf))
+                Some(process_buf(&mut self.buf))
             }
-            None if !self.buf.is_empty() => Some(cb(&mut self.buf)),
+            None if !self.buf.is_empty() => Some(process_buf(&mut self.buf)),
             Some(c) => Some(c),
             None => None,
         }
@@ -179,11 +256,14 @@ impl PctStr {
     /// The input slice is checked for correct percent-encoding.
     /// If the test fails, a [`InvalidEncoding`] error is returned.
     pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<&PctStr> {
-        if is_pct_encoded(str.as_ref()) {
-            Ok(unsafe { PctStr::new_unchecked(str) })
-        } else {
-            Err(InvalidEncoding)
+        let chars = Bytes {
+            inner: str.as_ref().bytes(),
+        };
+        let decoder = utf8_decode::UnsafeDecoder::new(chars.map(|x| x.map_err(|e| e.into())));
+        for c in decoder {
+            c.map_err(|_| InvalidEncoding)?;
         }
+        Ok(unsafe { Self::new_unchecked(str.as_ref()) })
     }
 
     /// Create a new percent-encoded string slice without checking for correct encoding.
@@ -212,10 +292,14 @@ impl PctStr {
     /// Iterate over the encoded characters of the string.
     #[inline]
     pub fn chars(&self) -> Chars {
-        Chars {
-            inner: self.data.chars(),
-            buf: vec![],
-            next: None,
+        Chars::new(self.data.chars())
+    }
+
+    /// Iterate over the encoded bytes of the string.
+    #[inline]
+    pub fn bytes(&self) -> Bytes {
+        Bytes {
+            inner: self.data.bytes(),
         }
     }
 
@@ -400,13 +484,9 @@ impl PctString {
     /// The input slice is checked for correct percent-encoding and copied.
     /// If the test fails, a [`InvalidEncoding`] error is returned.
     pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<PctString> {
-        if is_pct_encoded(str.as_ref()) {
-            Ok(PctString {
-                data: str.as_ref().to_string(),
-            })
-        } else {
-            Err(InvalidEncoding)
-        }
+        Ok(Self {
+            data: PctStr::new(str)?.decode(),
+        })
     }
 
     /// Encode a string into a percent-encoded string.
@@ -721,5 +801,27 @@ mod tests {
             &pct_string.as_str(),
             &"?test=традиционное%20польское%20блюдо&cjk=真正&private=\u{10FFFD}"
         );
+    }
+
+    #[test]
+    fn pct_encoding_invalid() {
+        let s = "%FF%FE%20%4F";
+        assert!(PctStr::new(s).is_err());
+        let s = "%36%A";
+        assert!(PctStr::new(s).is_err());
+        let s = "%%32";
+        assert!(PctStr::new(s).is_err());
+        let s = "%%32";
+        assert!(PctStr::new(s).is_err());
+    }
+
+    #[test]
+    fn pct_encoding_valid() {
+        let s = "%00%5C%F4%8F%BF%BD%69";
+        assert!(PctStr::new(s).is_ok());
+        let s = "No percent.";
+        assert!(PctStr::new(s).is_ok());
+        let s = "%e2%82%acwat";
+        assert!(PctStr::new(s).is_ok());
     }
 }
