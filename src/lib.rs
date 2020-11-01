@@ -382,9 +382,6 @@ impl fmt::Debug for PctStr {
 /// ```
 pub trait Encoder {
     /// Decide if the given character must be encoded.
-    ///
-    /// Note that the character `%` is always encoded even if this method returns `false` on it.
-    /// Only characters with codepoint below `0x100` are encoded.
     fn encode(&self, c: char) -> bool;
 }
 
