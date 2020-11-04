@@ -75,6 +75,19 @@ impl std::error::Error for InvalidEncoding {}
 /// Result of a function performing a percent-encoding check.
 pub type Result<T> = std::result::Result<T, InvalidEncoding>;
 
+#[inline(always)]
+fn to_digit(b: u8) -> std::result::Result<u8, ByteError> {
+	match b {
+		// ASCII 0..=9
+		0x30..=0x39 => Ok(b - 0x30),
+		// ASCII A..=F
+		0x41..=0x46 => Ok(b - 0x37),
+		// ASCII a..=f
+		0x61..=0x66 => Ok(b - 0x57),
+		_ => Err(ByteError::InvalidByte(b)),
+	}
+}
+
 /// Bytes iterator.
 ///
 /// Iterates over the encoded bytes of a percent-encoded string.
@@ -105,20 +118,38 @@ impl Display for ByteError {
 
 impl std::error::Error for ByteError {}
 
-#[inline(always)]
-fn to_digit(b: u8) -> std::result::Result<u8, ByteError> {
-	match b {
-		// ASCII 0..=9
-		0x30..=0x39 => Ok(b - 0x30),
-		// ASCII A..=F
-		0x41..=0x46 => Ok(b - 0x37),
-		// ASCII a..=f
-		0x61..=0x66 => Ok(b - 0x57),
-		_ => Err(ByteError::InvalidByte(b)),
+impl<'a> Iterator for Bytes<'a> {
+	type Item = u8;
+
+	fn next(&mut self) -> Option<u8> {
+		if let Some(next) = self.inner.next() {
+			match next {
+				b'%' => {
+					let a = self.inner.next().unwrap();
+					let a = to_digit(a).unwrap();
+					let b = self.inner.next().unwrap();
+					let b = to_digit(b).unwrap();
+					let byte = (a << 4 | b) as u8;
+					Some(byte)
+				}
+				_ => Some(next),
+			}
+		} else {
+			None
+		}
 	}
 }
 
-impl<'a> Bytes<'a> {
+impl<'a> std::iter::FusedIterator for Bytes<'a> {}
+
+/// Untrusted bytes iterator.
+///
+/// Iterates over the encoded bytes of a percent-encoded string.
+struct UntrustedBytes<'a> {
+	inner: std::str::Bytes<'a>,
+}
+
+impl<'a> UntrustedBytes<'a> {
 	fn try_next(&mut self, next: u8) -> std::result::Result<u8, ByteError> {
 		match next {
 			b'%' => {
@@ -140,7 +171,7 @@ impl<'a> Bytes<'a> {
 	}
 }
 
-impl<'a> Iterator for Bytes<'a> {
+impl<'a> Iterator for UntrustedBytes<'a> {
 	type Item = std::result::Result<u8, ByteError>;
 
 	fn next(&mut self) -> Option<std::result::Result<u8, ByteError>> {
@@ -152,7 +183,7 @@ impl<'a> Iterator for Bytes<'a> {
 	}
 }
 
-impl<'a> std::iter::FusedIterator for Bytes<'a> {}
+impl<'a> std::iter::FusedIterator for UntrustedBytes<'a> {}
 
 /// Characters iterator.
 ///
@@ -256,7 +287,7 @@ impl PctStr {
 	/// The input slice is checked for correct percent-encoding.
 	/// If the test fails, a [`InvalidEncoding`] error is returned.
 	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<&PctStr> {
-		let chars = Bytes {
+		let chars = UntrustedBytes {
 			inner: str.as_ref().bytes(),
 		};
 		let decoder = utf8_decode::UnsafeDecoder::new(chars.map(|x| x.map_err(|e| e.into())));
