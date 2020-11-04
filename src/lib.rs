@@ -51,7 +51,7 @@
 //! println!("{}", pct_string.as_str()); // => %48ello %57orld%21
 //! ```
 
-use std::fmt;
+use std::{fmt, io};
 use std::hash;
 use std::{
 	cmp::{Ord, Ordering, PartialOrd},
@@ -96,14 +96,14 @@ pub struct Bytes<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub enum ByteError {
+enum ByteError {
 	InvalidByte(u8),
 	IncompleteEncoding,
 }
 
-impl From<ByteError> for std::io::Error {
+impl From<ByteError> for io::Error {
 	fn from(e: ByteError) -> Self {
-		std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+		io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 	}
 }
 
@@ -150,7 +150,7 @@ struct UntrustedBytes<'a> {
 }
 
 impl<'a> UntrustedBytes<'a> {
-	fn try_next(&mut self, next: u8) -> std::result::Result<u8, ByteError> {
+	fn try_next(&mut self, next: u8) -> io::Result<u8> {
 		match next {
 			b'%' => {
 				let a = self
@@ -172,9 +172,9 @@ impl<'a> UntrustedBytes<'a> {
 }
 
 impl<'a> Iterator for UntrustedBytes<'a> {
-	type Item = std::result::Result<u8, ByteError>;
+	type Item = io::Result<u8>;
 
-	fn next(&mut self) -> Option<std::result::Result<u8, ByteError>> {
+	fn next(&mut self) -> Option<io::Result<u8>> {
 		if let Some(b) = self.inner.next() {
 			Some(self.try_next(b))
 		} else {
@@ -253,14 +253,15 @@ impl PctStr {
 	/// The input slice is checked for correct percent-encoding.
 	/// If the test fails, a [`InvalidEncoding`] error is returned.
 	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<&PctStr> {
+		let str = str.as_ref();
 		let chars = UntrustedBytes {
-			inner: str.as_ref().bytes(),
+			inner: str.bytes(),
 		};
-		let decoder = utf8_decode::UnsafeDecoder::new(chars.map(|x| x.map_err(|e| e.into())));
+		let decoder = utf8_decode::UnsafeDecoder::new(chars);
 		for c in decoder {
 			c.map_err(|_| InvalidEncoding)?;
 		}
-		Ok(unsafe { Self::new_unchecked(str.as_ref()) })
+		Ok(unsafe { Self::new_unchecked(str) })
 	}
 
 	/// Create a new percent-encoded string slice without checking for correct encoding.
