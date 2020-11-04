@@ -485,7 +485,7 @@ impl PctString {
 	/// If the test fails, a [`InvalidEncoding`] error is returned.
 	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<PctString> {
 		Ok(Self {
-			data: PctStr::new(str)?.decode(),
+			data: PctStr::new(str)?.data.to_string(),
 		})
 	}
 
