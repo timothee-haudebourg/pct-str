@@ -51,12 +51,12 @@
 //! println!("{}", pct_string.as_str()); // => %48ello %57orld%21
 //! ```
 
-use std::{fmt, io};
 use std::hash;
 use std::{
 	cmp::{Ord, Ordering, PartialOrd},
 	fmt::Display,
 };
+use std::{convert::TryFrom, fmt, io, str::FromStr};
 
 /// Encoding error.
 ///
@@ -254,9 +254,7 @@ impl PctStr {
 	/// If the test fails, a [`InvalidEncoding`] error is returned.
 	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<&PctStr> {
 		let str = str.as_ref();
-		let chars = UntrustedBytes {
-			inner: str.bytes(),
-		};
+		let chars = UntrustedBytes { inner: str.bytes() };
 		let decoder = utf8_decode::UnsafeDecoder::new(chars);
 		for c in decoder {
 			c.map_err(|_| InvalidEncoding)?;
@@ -646,6 +644,38 @@ impl fmt::Debug for PctString {
 	}
 }
 
+impl FromStr for PctString {
+	type Err = InvalidEncoding;
+
+	fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+		Self::new(s)
+	}
+}
+
+impl TryFrom<String> for PctString {
+	type Error = InvalidEncoding;
+
+	fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+		value.parse()
+	}
+}
+
+impl TryFrom<&str> for PctString {
+	type Error = InvalidEncoding;
+
+	fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+		value.parse()
+	}
+}
+
+impl<'a> TryFrom<&'a str> for &'a PctStr {
+	type Error = InvalidEncoding;
+
+	fn try_from(value: &'a str) -> std::result::Result<Self, Self::Error> {
+		PctStr::new(value)
+	}
+}
+
 /// URI-reserved characters encoder.
 ///
 /// This [`Encoder`] encodes characters that are reserved in the syntax of URI according to
@@ -724,6 +754,8 @@ impl Encoder for IriReserved {
 
 #[cfg(test)]
 mod tests {
+	use std::convert::TryInto;
+
 	use super::*;
 
 	#[test]
@@ -823,5 +855,12 @@ mod tests {
 		assert!(PctStr::new(s).is_ok());
 		let s = "%e2%82%acwat";
 		assert!(PctStr::new(s).is_ok());
+	}
+
+	#[test]
+	fn try_from() {
+		let s = "%00%5C%F4%8F%BF%BD%69";
+		let _pcs = PctString::try_from(s).unwrap();
+		let _pcs: &PctStr = s.try_into().unwrap();
 	}
 }
