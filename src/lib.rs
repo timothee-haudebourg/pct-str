@@ -189,17 +189,13 @@ impl<'a> std::iter::FusedIterator for UntrustedBytes<'a> {}
 ///
 /// Iterates over the encoded characters of a percent-encoded string.
 pub struct Chars<'a> {
-	inner: std::str::Chars<'a>,
-	buf: Vec<u8>,
-	next: Option<char>,
+	inner: utf8_decode::Decoder<Bytes<'a>>,
 }
 
 impl<'a> Chars<'a> {
-	fn new(chars: std::str::Chars<'a>) -> Self {
+	fn new(bytes: Bytes<'a>) -> Self {
 		Self {
-			inner: chars,
-			buf: Vec::with_capacity(4),
-			next: None,
+			inner: utf8_decode::Decoder::new(bytes),
 		}
 	}
 }
@@ -208,38 +204,8 @@ impl<'a> Iterator for Chars<'a> {
 	type Item = char;
 
 	fn next(&mut self) -> Option<char> {
-		if let Some(value) = self.next.take() {
-			return Some(value);
-		}
-
-		fn process_buf(buf: &mut Vec<u8>) -> char {
-			// This is safe because PctStr guarantees percent-encoded parts are valid UTF-8.
-			let result = std::str::from_utf8(&buf).unwrap().chars().next().unwrap();
-			buf.clear();
-			result
-		};
-
-		match self.inner.next() {
-			Some('%') => {
-				let a = self.inner.next().unwrap().to_digit(16).unwrap();
-				let b = self.inner.next().unwrap().to_digit(16).unwrap();
-				let byte = (a << 4 | b) as u8;
-				self.buf.push(byte);
-
-				if self.buf.len() == 4 {
-					return Some(process_buf(&mut self.buf));
-				}
-
-				self.next()
-			}
-			Some(c) if !self.buf.is_empty() => {
-				self.next = Some(c);
-				Some(process_buf(&mut self.buf))
-			}
-			None if !self.buf.is_empty() => Some(process_buf(&mut self.buf)),
-			Some(c) => Some(c),
-			None => None,
-		}
+		// Safe as PctStr guarantees a valid byte sequence
+		self.inner.next().map(|x| x.unwrap())
 	}
 }
 
@@ -323,7 +289,7 @@ impl PctStr {
 	/// Iterate over the encoded characters of the string.
 	#[inline]
 	pub fn chars(&self) -> Chars {
-		Chars::new(self.data.chars())
+		Chars::new(self.bytes())
 	}
 
 	/// Iterate over the encoded bytes of the string.
