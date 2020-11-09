@@ -694,15 +694,12 @@ impl Encoder for URIReserved {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IriComponent {
+pub enum IriReserved {
 	Segment,
 	SegmentNoColons,
 	Fragment,
 	Query,
 }
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct IriReserved(IriComponent);
 
 impl Encoder for IriReserved {
 	fn encode(&self, c: char) -> bool {
@@ -719,9 +716,9 @@ impl Encoder for IriReserved {
 			// sub-delims
 			'!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=' => return false,
 			'/' | '?' => {
-				return self.0 != IriComponent::Query && self.0 != IriComponent::Fragment
+				return *self != IriReserved::Query && *self != IriReserved::Fragment
 			}
-			':' => return self.0 == IriComponent::SegmentNoColons,
+			':' => return *self == IriReserved::SegmentNoColons,
 			_ => { /* fall through */ }
 		}
 
@@ -746,7 +743,7 @@ impl Encoder for IriReserved {
 			| 0xE1000..=0xEFFFD => false,
 			// iprivate
 			0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD => {
-				self.0 != IriComponent::Query
+				*self != IriReserved::Query
 			}
 			_ => true,
 		}
@@ -761,7 +758,7 @@ mod tests {
 
 	#[test]
 	fn iri_encode_cyrillic() {
-		let encoder = IriReserved(IriComponent::Segment);
+		let encoder = IriReserved::Segment;
 		let pct_string = PctString::encode("традиционное польское блюдо".chars(), encoder);
 		assert_eq!(&pct_string, &"традиционное польское блюдо");
 		assert_eq!(&pct_string.as_str(), &"традиционное%20польское%20блюдо");
@@ -769,7 +766,7 @@ mod tests {
 
 	#[test]
 	fn iri_encode_segment() {
-		let encoder = IriReserved(IriComponent::Segment);
+		let encoder = IriReserved::Segment;
 		let pct_string = PctString::encode(
 			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
 			encoder,
@@ -787,7 +784,7 @@ mod tests {
 
 	#[test]
 	fn iri_encode_segment_nocolon() {
-		let encoder = IriReserved(IriComponent::SegmentNoColons);
+		let encoder = IriReserved::SegmentNoColons;
 		let pct_string = PctString::encode(
 			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
 			encoder,
@@ -804,7 +801,7 @@ mod tests {
 
 	#[test]
 	fn iri_encode_fragment() {
-		let encoder = IriReserved(IriComponent::Fragment);
+		let encoder = IriReserved::Fragment;
 		let pct_string = PctString::encode(
 			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
 			encoder,
@@ -821,7 +818,7 @@ mod tests {
 
 	#[test]
 	fn iri_encode_query() {
-		let encoder = IriReserved(IriComponent::Query);
+		let encoder = IriReserved::Query;
 		let pct_string = PctString::encode(
 			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
 			encoder,
@@ -875,7 +872,7 @@ mod tests {
 	#[test]
 	fn iri_encode_percent_always() {
 		let s = "%";
-		let c = PctString::encode(s.chars(), IriReserved(IriComponent::Segment));
+		let c = PctString::encode(s.chars(), IriReserved::Segment);
 		assert_eq!(c.as_str(), "%25");
 	}
 }
