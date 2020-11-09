@@ -680,6 +680,7 @@ impl<'a> TryFrom<&'a str> for &'a PctStr {
 ///
 /// This [`Encoder`] encodes characters that are reserved in the syntax of URI according to
 /// [RFC 3986](https://tools.ietf.org/html/rfc3986).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct URIReserved;
 
 impl Encoder for URIReserved {
