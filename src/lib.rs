@@ -463,7 +463,7 @@ impl fmt::Debug for PctStr {
 pub trait Encoder {
 	/// Decide if the given character must be encoded.
 	///
-	/// Note that the character `%` is always encoded even if this method returns `false` on it.
+	/// Note that the character `%` MUST always be encoded.
 	fn encode(&self, c: char) -> bool;
 }
 
@@ -683,6 +683,7 @@ impl<'a> TryFrom<&'a str> for &'a PctStr {
 pub struct URIReserved;
 
 impl Encoder for URIReserved {
+	// Note that the character `%` MUST always be encoded.
 	fn encode(&self, c: char) -> bool {
 		match c {
 			'!' | '#' | '$' | '%' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | '/' | ':' | ';'
@@ -862,5 +863,19 @@ mod tests {
 		let s = "%00%5C%F4%8F%BF%BD%69";
 		let _pcs = PctString::try_from(s).unwrap();
 		let _pcs: &PctStr = s.try_into().unwrap();
+	}
+
+	#[test]
+	fn uri_encode_percent_always() {
+		let s = "%";
+		let c = PctString::encode(s.chars(), URIReserved);
+		assert_eq!(c.as_str(), "%25");
+	}
+
+	#[test]
+	fn iri_encode_percent_always() {
+		let s = "%";
+		let c = PctString::encode(s.chars(), IriReserved(IriComponent::Segment));
+		assert_eq!(c.as_str(), "%25");
 	}
 }
