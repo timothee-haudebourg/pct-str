@@ -8,7 +8,7 @@ keywords = ["percent", "percent-encoded", "encode", "decode", "string"]
 description = "Percent-encoded strings for URL, URI, IRI, etc."
 repository = "https://github.com/timothee-haudebourg/pct-str"
 documentation = "https://docs.rs/pct-str"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 
 [dependencies]
