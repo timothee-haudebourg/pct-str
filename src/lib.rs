@@ -693,6 +693,10 @@ impl Encoder for URIReserved {
 	}
 }
 
+/// IRI-reserved characters encoder.
+///
+/// This [`Encoder`] encodes characters that are reserved in the syntax of IRI according to
+/// [RFC 3987](https://tools.ietf.org/html/rfc3987).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IriReserved {
 	Segment,
@@ -702,6 +706,7 @@ pub enum IriReserved {
 }
 
 impl Encoder for IriReserved {
+	// Note that the character `%` MUST always be encoded.
 	fn encode(&self, c: char) -> bool {
 		// iunreserved
 		if c.is_ascii_alphanumeric() {
@@ -715,9 +720,7 @@ impl Encoder for IriReserved {
 			'-' | '.' | '_' | '~' => return false,
 			// sub-delims
 			'!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=' => return false,
-			'/' | '?' => {
-				return *self != IriReserved::Query && *self != IriReserved::Fragment
-			}
+			'/' | '?' => return *self != IriReserved::Query && *self != IriReserved::Fragment,
 			':' => return *self == IriReserved::SegmentNoColons,
 			_ => { /* fall through */ }
 		}
