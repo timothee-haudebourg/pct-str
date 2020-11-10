@@ -463,7 +463,7 @@ impl fmt::Debug for PctStr {
 pub trait Encoder {
 	/// Decide if the given character must be encoded.
 	///
-	/// Note that the character `%` MUST always be encoded.
+	/// Note that the character `%` is always encoded even if this method returns `false` on it.
 	fn encode(&self, c: char) -> bool;
 }
 
@@ -492,6 +492,8 @@ impl PctString {
 	/// This function takes an [`Encoder`] instance to decide which character of the string must
 	/// be encoded.
 	///
+	/// Note that the character `%` will always be encoded regardless of the provided [`Encoder`].
+	///
 	/// # Example
 	///
 	/// ```
@@ -506,7 +508,7 @@ impl PctString {
 		let mut buf = String::with_capacity(4);
 		let mut encoded = String::new();
 		for c in src {
-			if encoder.encode(c) {
+			if encoder.encode(c) || c == '%' {
 				buf.clear();
 				buf.push(c);
 				for byte in buf.bytes() {
@@ -684,7 +686,6 @@ impl<'a> TryFrom<&'a str> for &'a PctStr {
 pub struct URIReserved;
 
 impl Encoder for URIReserved {
-	// Note that the character `%` MUST always be encoded.
 	fn encode(&self, c: char) -> bool {
 		match c {
 			'!' | '#' | '$' | '%' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | '/' | ':' | ';'
@@ -707,7 +708,6 @@ pub enum IriReserved {
 }
 
 impl Encoder for IriReserved {
-	// Note that the character `%` MUST always be encoded.
 	fn encode(&self, c: char) -> bool {
 		// iunreserved
 		if c.is_ascii_alphanumeric() {
@@ -867,16 +867,15 @@ mod tests {
 	}
 
 	#[test]
-	fn uri_encode_percent_always() {
+	fn encode_percent_always() {
+		struct NoopEncoder;
+		impl Encoder for NoopEncoder {
+			fn encode(&self, _: char) -> bool {
+				false
+			}
+		}
 		let s = "%";
-		let c = PctString::encode(s.chars(), URIReserved);
-		assert_eq!(c.as_str(), "%25");
-	}
-
-	#[test]
-	fn iri_encode_percent_always() {
-		let s = "%";
-		let c = PctString::encode(s.chars(), IriReserved::Segment);
+		let c = PctString::encode(s.chars(), NoopEncoder);
 		assert_eq!(c.as_str(), "%25");
 	}
 }
