@@ -687,6 +687,10 @@ pub struct URIReserved;
 
 impl Encoder for URIReserved {
 	fn encode(&self, c: char) -> bool {
+		if !c.is_ascii_graphic() {
+			return true;
+		}
+
 		match c {
 			'!' | '#' | '$' | '%' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | '/' | ':' | ';'
 			| '=' | '?' | '@' | '[' | ']' => true,
@@ -835,6 +839,14 @@ mod tests {
 			&pct_string.as_str(),
 			&"?test=традиционное%20польское%20блюдо&cjk=真正&private=\u{10FFFD}"
 		);
+	}
+
+	#[test]
+	fn uri_encode_cyrillic() {
+		let encoder = URIReserved;
+		let pct_string = PctString::encode("традиционное польское блюдо".chars(), encoder);
+		assert_eq!(&pct_string, &"традиционное польское блюдо");
+		assert_eq!(&pct_string.as_str(), &"%D1%82%D1%80%D0%B0%D0%B4%D0%B8%D1%86%D0%B8%D0%BE%D0%BD%D0%BD%D0%BE%D0%B5%20%D0%BF%D0%BE%D0%BB%D1%8C%D1%81%D0%BA%D0%BE%D0%B5%20%D0%B1%D0%BB%D1%8E%D0%B4%D0%BE");
 	}
 
 	#[test]
