@@ -1,6 +1,6 @@
 extern crate pct_str;
 
-use pct_str::{PctString, PctStr};
+use pct_str::{PctStr, PctString};
 
 fn main() -> pct_str::Result<()> {
 	// [`PctString`] is the equivalent of [`String`] for

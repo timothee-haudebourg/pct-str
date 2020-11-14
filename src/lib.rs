@@ -52,69 +52,164 @@
 //! ```
 
 use std::hash;
-use std::fmt;
-use std::cmp::{PartialOrd, Ord, Ordering};
+use std::{
+	cmp::{Ord, Ordering, PartialOrd},
+	fmt::Display,
+};
+use std::{convert::TryFrom, fmt, io, str::FromStr};
 
 /// Encoding error.
 ///
 /// Raised when a given input string is not percent-encoded as expected.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InvalidEncoding;
+
+impl Display for InvalidEncoding {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str("invalid encoding")
+	}
+}
+
+impl std::error::Error for InvalidEncoding {}
 
 /// Result of a function performing a percent-encoding check.
 pub type Result<T> = std::result::Result<T, InvalidEncoding>;
 
-/// Checks if a string is a correct percent-encoded string.
-pub fn is_pct_encoded(str: &str) -> bool {
-	let mut chars = str.chars();
-	loop {
-		match chars.next() {
-			Some('%') => {
-				match chars.next() {
-					Some(c) if c.is_digit(16) => {
-						match chars.next() {
-							Some(c) if c.is_digit(16) => {
-								break
-							},
-							_ => return false
-						}
-					},
-					_ => return false
-				}
-			},
-			Some(_) => (),
-			None => break
+#[inline(always)]
+fn to_digit(b: u8) -> std::result::Result<u8, ByteError> {
+	match b {
+		// ASCII 0..=9
+		0x30..=0x39 => Ok(b - 0x30),
+		// ASCII A..=F
+		0x41..=0x46 => Ok(b - 0x37),
+		// ASCII a..=f
+		0x61..=0x66 => Ok(b - 0x57),
+		_ => Err(ByteError::InvalidByte(b)),
+	}
+}
+
+/// Bytes iterator.
+///
+/// Iterates over the encoded bytes of a percent-encoded string.
+pub struct Bytes<'a> {
+	inner: std::str::Bytes<'a>,
+}
+
+#[derive(Debug, Clone)]
+enum ByteError {
+	InvalidByte(u8),
+	IncompleteEncoding,
+}
+
+impl From<ByteError> for io::Error {
+	fn from(e: ByteError) -> Self {
+		io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+	}
+}
+
+impl Display for ByteError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			ByteError::InvalidByte(b) => write!(f, "Invalid UTF-8 byte: {:#x}", b),
+			ByteError::IncompleteEncoding => f.write_str("Incomplete percent-encoding segment"),
 		}
 	}
-
-	true
 }
+
+impl std::error::Error for ByteError {}
+
+impl<'a> Iterator for Bytes<'a> {
+	type Item = u8;
+
+	fn next(&mut self) -> Option<u8> {
+		if let Some(next) = self.inner.next() {
+			match next {
+				b'%' => {
+					let a = self.inner.next().unwrap();
+					let a = to_digit(a).unwrap();
+					let b = self.inner.next().unwrap();
+					let b = to_digit(b).unwrap();
+					let byte = (a << 4 | b) as u8;
+					Some(byte)
+				}
+				_ => Some(next),
+			}
+		} else {
+			None
+		}
+	}
+}
+
+impl<'a> std::iter::FusedIterator for Bytes<'a> {}
+
+/// Untrusted bytes iterator.
+///
+/// Iterates over the encoded bytes of a percent-encoded string.
+struct UntrustedBytes<'a> {
+	inner: std::str::Bytes<'a>,
+}
+
+impl<'a> UntrustedBytes<'a> {
+	fn try_next(&mut self, next: u8) -> io::Result<u8> {
+		match next {
+			b'%' => {
+				let a = self
+					.inner
+					.next()
+					.ok_or_else(|| ByteError::IncompleteEncoding)?;
+				let a = to_digit(a)?;
+				let b = self
+					.inner
+					.next()
+					.ok_or_else(|| ByteError::IncompleteEncoding)?;
+				let b = to_digit(b)?;
+				let byte = (a << 4 | b) as u8;
+				Ok(byte)
+			}
+			_ => Ok(next),
+		}
+	}
+}
+
+impl<'a> Iterator for UntrustedBytes<'a> {
+	type Item = io::Result<u8>;
+
+	fn next(&mut self) -> Option<io::Result<u8>> {
+		if let Some(b) = self.inner.next() {
+			Some(self.try_next(b))
+		} else {
+			None
+		}
+	}
+}
+
+impl<'a> std::iter::FusedIterator for UntrustedBytes<'a> {}
 
 /// Characters iterator.
 ///
 /// Iterates over the encoded characters of a percent-encoded string.
 pub struct Chars<'a> {
-	inner: std::str::Chars<'a>
+	inner: utf8_decode::Decoder<Bytes<'a>>,
+}
+
+impl<'a> Chars<'a> {
+	fn new(bytes: Bytes<'a>) -> Self {
+		Self {
+			inner: utf8_decode::Decoder::new(bytes),
+		}
+	}
 }
 
 impl<'a> Iterator for Chars<'a> {
 	type Item = char;
 
 	fn next(&mut self) -> Option<char> {
-		match self.inner.next() {
-			Some('%') => {
-				let a = self.inner.next().unwrap().to_digit(16).unwrap();
-				let b = self.inner.next().unwrap().to_digit(16).unwrap();
-				let codepoint = (a << 4 | b) as u32;
-				Some(unsafe { std::char::from_u32_unchecked(codepoint) })
-			},
-			Some(c) => Some(c),
-			None => None
-		}
+		// Safe as PctStr guarantees a valid byte sequence
+		self.inner.next().map(|x| x.unwrap())
 	}
 }
 
-impl<'a> std::iter::FusedIterator for Chars<'a> { }
+impl<'a> std::iter::FusedIterator for Chars<'a> {}
 
 /// Percent-Encoded string slice.
 ///
@@ -149,7 +244,7 @@ impl<'a> std::iter::FusedIterator for Chars<'a> { }
 /// println!("{}", decoded_string);
 /// ```
 pub struct PctStr {
-	data: str
+	data: str,
 }
 
 impl PctStr {
@@ -158,11 +253,13 @@ impl PctStr {
 	/// The input slice is checked for correct percent-encoding.
 	/// If the test fails, a [`InvalidEncoding`] error is returned.
 	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<&PctStr> {
-		if is_pct_encoded(str.as_ref()) {
-			Ok(unsafe { PctStr::new_unchecked(str) })
-		} else {
-			Err(InvalidEncoding)
+		let str = str.as_ref();
+		let chars = UntrustedBytes { inner: str.bytes() };
+		let decoder = utf8_decode::UnsafeDecoder::new(chars);
+		for c in decoder {
+			c.map_err(|_| InvalidEncoding)?;
 		}
+		Ok(unsafe { Self::new_unchecked(str) })
 	}
 
 	/// Create a new percent-encoded string slice without checking for correct encoding.
@@ -191,8 +288,14 @@ impl PctStr {
 	/// Iterate over the encoded characters of the string.
 	#[inline]
 	pub fn chars(&self) -> Chars {
-		Chars {
-			inner: self.data.chars()
+		Chars::new(self.bytes())
+	}
+
+	/// Iterate over the encoded bytes of the string.
+	#[inline]
+	pub fn bytes(&self) -> Bytes {
+		Bytes {
+			inner: self.data.bytes(),
 		}
 	}
 
@@ -221,7 +324,7 @@ impl PartialEq for PctStr {
 				(Some(_), None) => return false,
 				(None, Some(_)) => return false,
 				(None, None) => break,
-				_ => ()
+				_ => (),
 			}
 		}
 
@@ -229,7 +332,7 @@ impl PartialEq for PctStr {
 	}
 }
 
-impl Eq for PctStr { }
+impl Eq for PctStr {}
 
 impl PartialEq<str> for PctStr {
 	#[inline]
@@ -243,7 +346,7 @@ impl PartialEq<str> for PctStr {
 				(Some(_), None) => return false,
 				(None, Some(_)) => return false,
 				(None, None) => break,
-				_ => ()
+				_ => (),
 			}
 		}
 
@@ -263,7 +366,7 @@ impl PartialEq<PctString> for PctStr {
 				(Some(_), None) => return false,
 				(None, Some(_)) => return false,
 				(None, None) => break,
-				_ => ()
+				_ => (),
 			}
 		}
 
@@ -287,13 +390,11 @@ impl Ord for PctStr {
 				(None, None) => return Ordering::Equal,
 				(None, Some(_)) => return Ordering::Less,
 				(Some(_), None) => return Ordering::Greater,
-				(Some(a), Some(b)) => {
-					match a.cmp(&b) {
-						Ordering::Less => return Ordering::Less,
-						Ordering::Greater => return Ordering::Greater,
-						Ordering::Equal => ()
-					}
-				}
+				(Some(a), Some(b)) => match a.cmp(&b) {
+					Ordering::Less => return Ordering::Less,
+					Ordering::Greater => return Ordering::Greater,
+					Ordering::Equal => (),
+				},
 			}
 		}
 	}
@@ -363,7 +464,6 @@ pub trait Encoder {
 	/// Decide if the given character must be encoded.
 	///
 	/// Note that the character `%` is always encoded even if this method returns `false` on it.
-	/// Only characters with codepoint below `0x100` are encoded.
 	fn encode(&self, c: char) -> bool;
 }
 
@@ -373,15 +473,7 @@ pub trait Encoder {
 /// It implements [`Deref`](`std::ops::Deref`) to [`PctStr`] meaning that all methods on [`PctStr`] slices are
 /// available on `PctString` values as well.
 pub struct PctString {
-	data: String
-}
-
-unsafe fn to_hex_digit(b: u32) -> char {
-	if b < 10 {
-		std::char::from_u32_unchecked(b + 0x30)
-	} else {
-		std::char::from_u32_unchecked(b + 0x37)
-	}
+	data: String,
 }
 
 impl PctString {
@@ -390,19 +482,17 @@ impl PctString {
 	/// The input slice is checked for correct percent-encoding and copied.
 	/// If the test fails, a [`InvalidEncoding`] error is returned.
 	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<PctString> {
-		if is_pct_encoded(str.as_ref()) {
-			Ok(PctString {
-				data: str.as_ref().to_string()
-			})
-		} else {
-			Err(InvalidEncoding)
-		}
+		Ok(Self {
+			data: PctStr::new(str)?.data.to_string(),
+		})
 	}
 
 	/// Encode a string into a percent-encoded string.
 	///
 	/// This function takes an [`Encoder`] instance to decide which character of the string must
 	/// be encoded.
+	///
+	/// Note that the character `%` will always be encoded regardless of the provided [`Encoder`].
 	///
 	/// # Example
 	///
@@ -413,25 +503,23 @@ impl PctString {
 	/// println!("{}", pct_string.as_str()); // => Hello World%21
 	/// ```
 	pub fn encode<I: Iterator<Item = char>, E: Encoder>(src: I, encoder: E) -> PctString {
+		use std::fmt::Write;
+
+		let mut buf = String::with_capacity(4);
 		let mut encoded = String::new();
 		for c in src {
-			let codepoint = c as u32;
-			if c == '%' || (codepoint <= 0xff && encoder.encode(c)) {
-				let a = (codepoint >> 4) & 0xf;
-				let b = codepoint & 0xf;
-				encoded.push('%');
-				unsafe {
-					encoded.push(to_hex_digit(a));
-					encoded.push(to_hex_digit(b));
+			if encoder.encode(c) || c == '%' {
+				buf.clear();
+				buf.push(c);
+				for byte in buf.bytes() {
+					write!(encoded, "%{:02X}", byte).unwrap();
 				}
 			} else {
 				encoded.push(c);
 			}
 		}
 
-		PctString {
-			data: encoded
-		}
+		PctString { data: encoded }
 	}
 
 	/// Return this string as a borrowed percent-encoded string slice.
@@ -452,8 +540,8 @@ impl std::ops::Deref for PctString {
 
 	#[inline]
 	fn deref(&self) -> &PctStr {
-        self.as_pct_str()
-    }
+		self.as_pct_str()
+	}
 }
 
 impl PartialEq for PctString {
@@ -468,7 +556,7 @@ impl PartialEq for PctString {
 				(Some(_), None) => return false,
 				(None, Some(_)) => return false,
 				(None, None) => break,
-				_ => ()
+				_ => (),
 			}
 		}
 
@@ -476,7 +564,7 @@ impl PartialEq for PctString {
 	}
 }
 
-impl Eq for PctString { }
+impl Eq for PctString {}
 
 impl PartialEq<PctStr> for PctString {
 	#[inline]
@@ -490,7 +578,7 @@ impl PartialEq<PctStr> for PctString {
 				(Some(_), None) => return false,
 				(None, Some(_)) => return false,
 				(None, None) => break,
-				_ => ()
+				_ => (),
 			}
 		}
 
@@ -510,7 +598,7 @@ impl PartialEq<&str> for PctString {
 				(Some(_), None) => return false,
 				(None, Some(_)) => return false,
 				(None, None) => break,
-				_ => ()
+				_ => (),
 			}
 		}
 
@@ -558,19 +646,248 @@ impl fmt::Debug for PctString {
 	}
 }
 
+impl FromStr for PctString {
+	type Err = InvalidEncoding;
+
+	fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+		Self::new(s)
+	}
+}
+
+impl TryFrom<String> for PctString {
+	type Error = InvalidEncoding;
+
+	fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+		value.parse()
+	}
+}
+
+impl TryFrom<&str> for PctString {
+	type Error = InvalidEncoding;
+
+	fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+		value.parse()
+	}
+}
+
+impl<'a> TryFrom<&'a str> for &'a PctStr {
+	type Error = InvalidEncoding;
+
+	fn try_from(value: &'a str) -> std::result::Result<Self, Self::Error> {
+		PctStr::new(value)
+	}
+}
+
 /// URI-reserved characters encoder.
 ///
 /// This [`Encoder`] encodes characters that are reserved in the syntax of URI according to
 /// [RFC 3986](https://tools.ietf.org/html/rfc3986).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct URIReserved;
 
 impl Encoder for URIReserved {
 	fn encode(&self, c: char) -> bool {
-		match c {
-			'!' | '#' | '$' | '%' | '&' | '\'' |
-			'(' | ')' | '*' | '+' | ',' | '/' |
-			':' | ';' | '=' | '?' | '@' | '[' | ']' => true,
-			_ => false
+		if !c.is_ascii_graphic() {
+			return true;
 		}
+
+		match c {
+			'!' | '#' | '$' | '%' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | '/' | ':' | ';'
+			| '=' | '?' | '@' | '[' | ']' => true,
+			_ => false,
+		}
+	}
+}
+
+/// IRI-reserved characters encoder.
+///
+/// This [`Encoder`] encodes characters that are reserved in the syntax of IRI according to
+/// [RFC 3987](https://tools.ietf.org/html/rfc3987).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IriReserved {
+	Segment,
+	SegmentNoColons,
+	Fragment,
+	Query,
+}
+
+impl Encoder for IriReserved {
+	fn encode(&self, c: char) -> bool {
+		// iunreserved
+		if c.is_ascii_alphanumeric() {
+			return false;
+		}
+
+		match c {
+			// ipchar
+			'@' => return false,
+			// iunreserved
+			'-' | '.' | '_' | '~' => return false,
+			// sub-delims
+			'!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=' => return false,
+			'/' | '?' => return *self != IriReserved::Query && *self != IriReserved::Fragment,
+			':' => return *self == IriReserved::SegmentNoColons,
+			_ => { /* fall through */ }
+		}
+
+		match c as u32 {
+			// ucschar
+			0xA0..=0xD7FF
+			| 0xF900..=0xFDCF
+			| 0xFDF0..=0xFFEF
+			| 0x10000..=0x1FFFD
+			| 0x20000..=0x2FFFD
+			| 0x30000..=0x3FFFD
+			| 0x40000..=0x4FFFD
+			| 0x50000..=0x5FFFD
+			| 0x60000..=0x6FFFD
+			| 0x70000..=0x7FFFD
+			| 0x80000..=0x8FFFD
+			| 0x90000..=0x9FFFD
+			| 0xA0000..=0xAFFFD
+			| 0xB0000..=0xBFFFD
+			| 0xC0000..=0xCFFFD
+			| 0xD0000..=0xDFFFD
+			| 0xE1000..=0xEFFFD => false,
+			// iprivate
+			0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD => {
+				*self != IriReserved::Query
+			}
+			_ => true,
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::convert::TryInto;
+
+	use super::*;
+
+	#[test]
+	fn iri_encode_cyrillic() {
+		let encoder = IriReserved::Segment;
+		let pct_string = PctString::encode("традиционное польское блюдо".chars(), encoder);
+		assert_eq!(&pct_string, &"традиционное польское блюдо");
+		assert_eq!(&pct_string.as_str(), &"традиционное%20польское%20блюдо");
+	}
+
+	#[test]
+	fn iri_encode_segment() {
+		let encoder = IriReserved::Segment;
+		let pct_string = PctString::encode(
+			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+			encoder,
+		);
+
+		assert_eq!(
+			&pct_string,
+			&"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+		);
+		assert_eq!(
+			&pct_string.as_str(),
+			&"%3Ftest=традиционное%20польское%20блюдо&cjk=真正&private=%F4%8F%BF%BD"
+		);
+	}
+
+	#[test]
+	fn iri_encode_segment_nocolon() {
+		let encoder = IriReserved::SegmentNoColons;
+		let pct_string = PctString::encode(
+			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+			encoder,
+		);
+		assert_eq!(
+			&pct_string,
+			&"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+		);
+		assert_eq!(
+			&pct_string.as_str(),
+			&"%3Ftest=традиционное%20польское%20блюдо&cjk=真正&private=%F4%8F%BF%BD"
+		);
+	}
+
+	#[test]
+	fn iri_encode_fragment() {
+		let encoder = IriReserved::Fragment;
+		let pct_string = PctString::encode(
+			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+			encoder,
+		);
+		assert_eq!(
+			&pct_string,
+			&"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+		);
+		assert_eq!(
+			&pct_string.as_str(),
+			&"?test=традиционное%20польское%20блюдо&cjk=真正&private=%F4%8F%BF%BD"
+		);
+	}
+
+	#[test]
+	fn iri_encode_query() {
+		let encoder = IriReserved::Query;
+		let pct_string = PctString::encode(
+			"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}".chars(),
+			encoder,
+		);
+		assert_eq!(
+			&pct_string,
+			&"?test=традиционное польское блюдо&cjk=真正&private=\u{10FFFD}"
+		);
+		assert_eq!(
+			&pct_string.as_str(),
+			&"?test=традиционное%20польское%20блюдо&cjk=真正&private=\u{10FFFD}"
+		);
+	}
+
+	#[test]
+	fn uri_encode_cyrillic() {
+		let encoder = URIReserved;
+		let pct_string = PctString::encode("традиционное польское блюдо\0".chars(), encoder);
+		assert_eq!(&pct_string, &"традиционное польское блюдо\0");
+		assert_eq!(&pct_string.as_str(), &"%D1%82%D1%80%D0%B0%D0%B4%D0%B8%D1%86%D0%B8%D0%BE%D0%BD%D0%BD%D0%BE%D0%B5%20%D0%BF%D0%BE%D0%BB%D1%8C%D1%81%D0%BA%D0%BE%D0%B5%20%D0%B1%D0%BB%D1%8E%D0%B4%D0%BE%00");
+	}
+
+	#[test]
+	fn pct_encoding_invalid() {
+		let s = "%FF%FE%20%4F";
+		assert!(PctStr::new(s).is_err());
+		let s = "%36%A";
+		assert!(PctStr::new(s).is_err());
+		let s = "%%32";
+		assert!(PctStr::new(s).is_err());
+		let s = "%%32";
+		assert!(PctStr::new(s).is_err());
+	}
+
+	#[test]
+	fn pct_encoding_valid() {
+		let s = "%00%5C%F4%8F%BF%BD%69";
+		assert!(PctStr::new(s).is_ok());
+		let s = "No percent.";
+		assert!(PctStr::new(s).is_ok());
+		let s = "%e2%82%acwat";
+		assert!(PctStr::new(s).is_ok());
+	}
+
+	#[test]
+	fn try_from() {
+		let s = "%00%5C%F4%8F%BF%BD%69";
+		let _pcs = PctString::try_from(s).unwrap();
+		let _pcs: &PctStr = s.try_into().unwrap();
+	}
+
+	#[test]
+	fn encode_percent_always() {
+		struct NoopEncoder;
+		impl Encoder for NoopEncoder {
+			fn encode(&self, _: char) -> bool {
+				false
+			}
+		}
+		let s = "%";
+		let c = PctString::encode(s.chars(), NoopEncoder);
+		assert_eq!(c.as_str(), "%25");
 	}
 }
