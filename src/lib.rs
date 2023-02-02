@@ -42,9 +42,9 @@
 //! struct CustomEncoder;
 //!
 //! impl pct_str::Encoder for CustomEncoder {
-//! 	fn encode(&self, c: char) -> bool {
-//! 		URIReserved.encode(c) || c.is_uppercase()
-//! 	}
+//!   fn encode(&self, c: char) -> bool {
+//!     URIReserved.encode(c) || c.is_uppercase()
+//!   }
 //! }
 //!
 //! let pct_string = PctString::encode("Hello World!".chars(), CustomEncoder);
@@ -129,7 +129,7 @@ impl<'a> Iterator for Bytes<'a> {
 					let a = to_digit(a).unwrap();
 					let b = self.inner.next().unwrap();
 					let b = to_digit(b).unwrap();
-					let byte = (a << 4 | b) as u8;
+					let byte = a << 4 | b;
 					Some(byte)
 				}
 				_ => Some(next),
@@ -153,17 +153,11 @@ impl<'a> UntrustedBytes<'a> {
 	fn try_next(&mut self, next: u8) -> io::Result<u8> {
 		match next {
 			b'%' => {
-				let a = self
-					.inner
-					.next()
-					.ok_or_else(|| ByteError::IncompleteEncoding)?;
+				let a = self.inner.next().ok_or(ByteError::IncompleteEncoding)?;
 				let a = to_digit(a)?;
-				let b = self
-					.inner
-					.next()
-					.ok_or_else(|| ByteError::IncompleteEncoding)?;
+				let b = self.inner.next().ok_or(ByteError::IncompleteEncoding)?;
 				let b = to_digit(b)?;
-				let byte = (a << 4 | b) as u8;
+				let byte = a << 4 | b;
 				Ok(byte)
 			}
 			_ => Ok(next),
@@ -175,11 +169,7 @@ impl<'a> Iterator for UntrustedBytes<'a> {
 	type Item = io::Result<u8>;
 
 	fn next(&mut self) -> Option<io::Result<u8>> {
-		if let Some(b) = self.inner.next() {
-			Some(self.try_next(b))
-		} else {
-			None
-		}
+		self.inner.next().map(|b| self.try_next(b))
 	}
 }
 
@@ -235,7 +225,7 @@ impl<'a> std::iter::FusedIterator for Chars<'a> {}
 /// // Just as a regular string, you can iterate over the
 /// // encoded characters of `pct_str` with [`PctStr::chars`].
 /// for c in pct_str.chars() {
-/// 	print!("{}", c);
+///   print!("{}", c);
 /// }
 ///
 /// // You can decode the string and every remove percent-encoded characters
@@ -266,6 +256,10 @@ impl PctStr {
 	///
 	/// This is an unsafe function. The resulting string slice will have an undefined behaviour
 	/// if the input slice is not percent-encoded.
+	///
+	/// # Safety
+	///
+	/// The input `str` must be a valid percent-encoded string.
 	pub unsafe fn new_unchecked<S: AsRef<str> + ?Sized>(str: &S) -> &PctStr {
 		&*(str.as_ref() as *const str as *const PctStr)
 	}
@@ -277,6 +271,12 @@ impl PctStr {
 	#[inline]
 	pub fn len(&self) -> usize {
 		self.data.len()
+	}
+
+	/// Checks if the string is empty.
+	#[inline]
+	pub fn is_empty(&self) -> bool {
+		self.data.is_empty()
 	}
 
 	/// Get the underlying percent-encoded string slice.
@@ -452,9 +452,9 @@ impl fmt::Debug for PctStr {
 /// struct CustomEncoder;
 ///
 /// impl pct_str::Encoder for CustomEncoder {
-/// 	fn encode(&self, c: char) -> bool {
-/// 		URIReserved.encode(c) || c.is_uppercase()
-/// 	}
+///   fn encode(&self, c: char) -> bool {
+///     URIReserved.encode(c) || c.is_uppercase()
+///   }
 /// }
 ///
 /// let pct_string = PctString::encode("Hello World!".chars(), CustomEncoder);
@@ -691,11 +691,16 @@ impl Encoder for URIReserved {
 			return true;
 		}
 
-		match c {
-			'!' | '#' | '$' | '%' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | '/' | ':' | ';'
-			| '=' | '?' | '@' | '[' | ']' => true,
-			_ => false,
-		}
+		matches!(
+			c,
+			'!' | '#'
+				| '$' | '%' | '&'
+				| '\'' | '(' | ')'
+				| '*' | '+' | ','
+				| '/' | ':' | ';'
+				| '=' | '?' | '@'
+				| '[' | ']'
+		)
 	}
 }
 
