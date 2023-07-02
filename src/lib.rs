@@ -1,10 +1,10 @@
-//! This crate provides two types, [`PctStr`] and [`PctString`], similar to [`str`] and [`String`],
+//! This crate provides two types, [`PctStr`] and [`PctString`], similar to `str` and [`String`],
 //! representing percent-encoded strings used in URL, URI, IRI, etc.
 //! You can use them to encode, decode and compare percent-encoded strings.
 //!
 //! # Basic usage
 //!
-//! You can parse/decode percent-encoded strings by building a [`PctStr`] slice over a [`str`] slice.
+//! You can parse/decode percent-encoded strings by building a [`PctStr`] slice over a `str` slice.
 //!
 //! ```
 //! use pct_str::PctStr;
@@ -47,6 +47,11 @@
 //! let pct_string = PctString::encode("Hello World!".chars(), CustomEncoder);
 //! assert_eq!(pct_string.as_str(), "%48ello%20%57orld%21")
 //! ```
+//! 
+//! [`String`]: ::alloc::string::String
+//! [`PctStr`]: crate::PctStr
+//! [`PctString`]: crate::PctString
+//! [`Encoder`]: crate::Encoder
 
 use std::borrow::Borrow;
 use std::hash;
