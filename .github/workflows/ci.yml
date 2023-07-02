@@ -1,29 +1,39 @@
-name: Continuous Integration
+name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
 
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLORS: always
 
 jobs:
-  test:
-    name: Test Suite
+  tests:
+    name: Tests
     runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: "1.65.0"
-        profile: minimal
-        override: true
-    - name: Build
-      run: cargo build --verbose
-    - name: Test
-      run: cargo test --verbose
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: "1.66.0"
+          profile: minimal
+          override: true
+      - name: Build
+        run: cargo build --all-features --verbose
+      - name: Run tests
+        run: cargo test --all-features --verbose
   rustfmt:
-    name: Rustfmt
+    name: Formatting
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,7 +41,7 @@ jobs:
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: "1.66.0"
           profile: minimal
           override: true
           components: rustfmt
@@ -41,15 +51,16 @@ jobs:
           command: fmt
           args: --all -- --check
   clippy:
-    name: Clippy
+    name: Warnings
     runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: "1.66.0"
           profile: minimal
           override: true
           components: clippy
@@ -57,4 +68,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: clippy
-          args: -- -D warnings
+          args: --all-features -- -D warnings
