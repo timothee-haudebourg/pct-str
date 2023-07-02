@@ -1,8 +1,8 @@
 extern crate pct_str;
 
-use pct_str::PctStr;
+use pct_str::{InvalidPctString, PctStr};
 
-fn main() -> pct_str::Result<()> {
+fn main() -> Result<(), InvalidPctString<&'static str>> {
 	// [`PctStr`] is the equivalent of [`str`] for percent-encoded strings.
 	let buffer = "Hello%20World%21";
 	// It is just a reference to `buffer`.

@@ -10,20 +10,21 @@ impl pct_str::Encoder for CustomEncoder {
 	}
 }
 
-fn main() -> pct_str::Result<()> {
+fn main() {
 	// You can encode any string into a percent-encoded string
 	// using the [`PctString::encode`] function.
-	// It takes a `char` iterator and a [`Encoder`] instance deciding which characters
-	// to encode.
+	// It takes a `char` iterator and a [`Encoder`] instance deciding which
+	// characters to encode.
 	let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
 	// [`URIReserved`] is a predefined encoder for URI-reserved characters.
-	println!("{}", pct_string.as_str());
-	// => Hello World%21
+	assert_eq!(pct_string.as_str(), "Hello World%21");
 
 	// You can create your own encoder by implementing the [`Encoder`] trait.
 	let pct_string = PctString::encode("Hello World!".chars(), CustomEncoder);
 	println!("{}", pct_string.as_str());
-	// => %48ello %57orld%21
+	assert_eq!(pct_string.as_str(), "%48ello %57orld%21");
 
-	Ok(())
+	// You can also use any function implementing `Fn(char) -> bool`.
+	let pct_string = PctString::encode("Hello World!".chars(), char::is_uppercase);
+	assert_eq!(pct_string.as_str(), "%48ello %57orld!");
 }

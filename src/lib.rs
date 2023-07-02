@@ -1,5 +1,3 @@
-//! Percent-encoded strings manipulation.
-//!
 //! This crate provides two types, [`PctStr`] and [`PctString`], similar to [`str`] and [`String`],
 //! representing percent-encoded strings used in URL, URI, IRI, etc.
 //! You can use them to encode, decode and compare percent-encoded strings.
@@ -12,11 +10,10 @@
 //! use pct_str::PctStr;
 //!
 //! let pct_str = PctStr::new("Hello%20World%21").unwrap();
-//!
-//! assert!(pct_str == "Hello World!");
+//! assert_eq!(pct_str, "Hello World!");
 //!
 //! let decoded_string: String = pct_str.decode();
-//! println!("{}", decoded_string); // => Hello World!
+//! assert_eq!(decoded_string, "Hello World!")
 //! ```
 //!
 //! To create new percent-encoded strings, use the [`PctString`] to copy or encode new strings.
@@ -30,7 +27,7 @@
 //! // Encode the given regular string.
 //! let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
 //!
-//! println!("{}", pct_string.as_str()); // => Hello World%21
+//! assert_eq!(pct_string.as_str(), "Hello%20World%21");
 //! ```
 //!
 //! You can choose which character will be percent-encoded by the `encode` function
@@ -48,9 +45,10 @@
 //! }
 //!
 //! let pct_string = PctString::encode("Hello World!".chars(), CustomEncoder);
-//! println!("{}", pct_string.as_str()); // => %48ello %57orld%21
+//! assert_eq!(pct_string.as_str(), "%48ello%20%57orld%21")
 //! ```
 
+use std::borrow::Borrow;
 use std::hash;
 use std::{
 	cmp::{Ord, Ordering, PartialOrd},
@@ -61,22 +59,24 @@ use std::{convert::TryFrom, fmt, io, str::FromStr};
 /// Encoding error.
 ///
 /// Raised when a given input string is not percent-encoded as expected.
-#[derive(Debug, Clone)]
-pub struct InvalidEncoding;
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("invalid percent-encoded string")]
+pub struct InvalidPctString<T>(pub T);
 
-impl Display for InvalidEncoding {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		f.write_str("invalid encoding")
+impl<T> InvalidPctString<T> {
+	pub fn map<U>(self, f: impl FnOnce(T) -> U) -> InvalidPctString<U> {
+		InvalidPctString(f(self.0))
 	}
 }
 
-impl std::error::Error for InvalidEncoding {}
-
-/// Result of a function performing a percent-encoding check.
-pub type Result<T> = std::result::Result<T, InvalidEncoding>;
+impl<'a, T: ?Sized + ToOwned> InvalidPctString<&'a T> {
+	pub fn into_owned(self) -> InvalidPctString<T::Owned> {
+		self.map(T::to_owned)
+	}
+}
 
 #[inline(always)]
-fn to_digit(b: u8) -> std::result::Result<u8, ByteError> {
+fn to_digit(b: u8) -> Result<u8, ByteError> {
 	match b {
 		// ASCII 0..=9
 		0x30..=0x39 => Ok(b - 0x30),
@@ -91,9 +91,7 @@ fn to_digit(b: u8) -> std::result::Result<u8, ByteError> {
 /// Bytes iterator.
 ///
 /// Iterates over the encoded bytes of a percent-encoded string.
-pub struct Bytes<'a> {
-	inner: std::str::Bytes<'a>,
-}
+pub struct Bytes<'a>(std::slice::Iter<'a, u8>);
 
 #[derive(Debug, Clone)]
 enum ByteError {
@@ -122,12 +120,12 @@ impl<'a> Iterator for Bytes<'a> {
 	type Item = u8;
 
 	fn next(&mut self) -> Option<u8> {
-		if let Some(next) = self.inner.next() {
+		if let Some(next) = self.0.next().copied() {
 			match next {
 				b'%' => {
-					let a = self.inner.next().unwrap();
+					let a = self.0.next().copied().unwrap();
 					let a = to_digit(a).unwrap();
-					let b = self.inner.next().unwrap();
+					let b = self.0.next().copied().unwrap();
 					let b = to_digit(b).unwrap();
 					let byte = a << 4 | b;
 					Some(byte)
@@ -145,17 +143,21 @@ impl<'a> std::iter::FusedIterator for Bytes<'a> {}
 /// Untrusted bytes iterator.
 ///
 /// Iterates over the encoded bytes of a percent-encoded string.
-struct UntrustedBytes<'a> {
-	inner: std::str::Bytes<'a>,
+struct UntrustedBytes<B>(B);
+
+impl<B> UntrustedBytes<B> {
+	fn new(bytes: B) -> Self {
+		Self(bytes)
+	}
 }
 
-impl<'a> UntrustedBytes<'a> {
+impl<B: Iterator<Item = u8>> UntrustedBytes<B> {
 	fn try_next(&mut self, next: u8) -> io::Result<u8> {
 		match next {
 			b'%' => {
-				let a = self.inner.next().ok_or(ByteError::IncompleteEncoding)?;
+				let a = self.0.next().ok_or(ByteError::IncompleteEncoding)?;
 				let a = to_digit(a)?;
-				let b = self.inner.next().ok_or(ByteError::IncompleteEncoding)?;
+				let b = self.0.next().ok_or(ByteError::IncompleteEncoding)?;
 				let b = to_digit(b)?;
 				let byte = a << 4 | b;
 				Ok(byte)
@@ -165,15 +167,15 @@ impl<'a> UntrustedBytes<'a> {
 	}
 }
 
-impl<'a> Iterator for UntrustedBytes<'a> {
+impl<B: Iterator<Item = u8>> Iterator for UntrustedBytes<B> {
 	type Item = io::Result<u8>;
 
 	fn next(&mut self) -> Option<io::Result<u8>> {
-		self.inner.next().map(|b| self.try_next(b))
+		self.0.next().map(|b| self.try_next(b))
 	}
 }
 
-impl<'a> std::iter::FusedIterator for UntrustedBytes<'a> {}
+impl<B: Iterator<Item = u8>> std::iter::FusedIterator for UntrustedBytes<B> {}
 
 /// Characters iterator.
 ///
@@ -233,23 +235,20 @@ impl<'a> std::iter::FusedIterator for Chars<'a> {}
 /// let decoded_string: String = pct_str.decode();
 /// println!("{}", decoded_string);
 /// ```
-pub struct PctStr {
-	data: str,
-}
+pub struct PctStr([u8]);
 
 impl PctStr {
 	/// Create a new percent-encoded string slice.
 	///
 	/// The input slice is checked for correct percent-encoding.
 	/// If the test fails, a [`InvalidEncoding`] error is returned.
-	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<&PctStr> {
-		let str = str.as_ref();
-		let chars = UntrustedBytes { inner: str.bytes() };
-		let decoder = utf8_decode::UnsafeDecoder::new(chars);
-		for c in decoder {
-			c.map_err(|_| InvalidEncoding)?;
+	pub fn new<S: AsRef<[u8]> + ?Sized>(input: &S) -> Result<&PctStr, InvalidPctString<&S>> {
+		let input_bytes = input.as_ref();
+		if Self::validate(input_bytes.iter().copied()) {
+			Ok(unsafe { Self::new_unchecked(input_bytes) })
+		} else {
+			Err(InvalidPctString(input))
 		}
-		Ok(unsafe { Self::new_unchecked(str) })
 	}
 
 	/// Create a new percent-encoded string slice without checking for correct encoding.
@@ -260,29 +259,46 @@ impl PctStr {
 	/// # Safety
 	///
 	/// The input `str` must be a valid percent-encoded string.
-	pub unsafe fn new_unchecked<S: AsRef<str> + ?Sized>(str: &S) -> &PctStr {
-		&*(str.as_ref() as *const str as *const PctStr)
+	pub unsafe fn new_unchecked<S: AsRef<[u8]> + ?Sized>(input: &S) -> &PctStr {
+		std::mem::transmute(input.as_ref())
 	}
 
-	/// Length of the string slice, in bytes.
+	/// Checks that the given iterator produces a valid percent-encoded string.
+	pub fn validate(input: impl Iterator<Item = u8>) -> bool {
+		let chars = UntrustedBytes::new(input);
+		utf8_decode::UnsafeDecoder::new(chars).all(|r| r.is_ok())
+	}
+
+	/// Length of the decoded string (character count).
 	///
-	/// Note that two percent-encoded strings with different lengths may
-	/// represent the same string.
+	/// Computed in linear time.
+	/// This is different from the byte length, which can be retrieved using
+	/// `value.as_bytes().len()`.
 	#[inline]
 	pub fn len(&self) -> usize {
-		self.data.len()
+		self.chars().count()
 	}
 
 	/// Checks if the string is empty.
 	#[inline]
 	pub fn is_empty(&self) -> bool {
-		self.data.is_empty()
+		self.0.is_empty()
+	}
+
+	/// Returns the underlying percent-encoding bytes.
+	#[inline]
+	pub fn as_bytes(&self) -> &[u8] {
+		&self.0
 	}
 
 	/// Get the underlying percent-encoded string slice.
 	#[inline]
 	pub fn as_str(&self) -> &str {
-		&self.data
+		unsafe {
+			// SAFETY: the data has be validated, and all percent-encoded
+			//         strings are valid UTF-8 strings.
+			core::str::from_utf8_unchecked(&self.0)
+		}
 	}
 
 	/// Iterate over the encoded characters of the string.
@@ -294,9 +310,7 @@ impl PctStr {
 	/// Iterate over the encoded bytes of the string.
 	#[inline]
 	pub fn bytes(&self) -> Bytes {
-		Bytes {
-			inner: self.data.bytes(),
-		}
+		Bytes(self.0.iter())
 	}
 
 	/// Decoding.
@@ -417,13 +431,45 @@ impl hash::Hash for PctStr {
 
 impl fmt::Display for PctStr {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		fmt::Display::fmt(&self.data, f)
+		fmt::Display::fmt(self.as_str(), f)
 	}
 }
 
 impl fmt::Debug for PctStr {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		fmt::Debug::fmt(&self.data, f)
+		fmt::Debug::fmt(self.as_str(), f)
+	}
+}
+
+impl ToOwned for PctStr {
+	type Owned = PctString;
+
+	fn to_owned(&self) -> Self::Owned {
+		unsafe { PctString::new_unchecked(self.0.to_owned()) }
+	}
+}
+
+impl Borrow<str> for PctStr {
+	fn borrow(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl AsRef<str> for PctStr {
+	fn as_ref(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl Borrow<[u8]> for PctStr {
+	fn borrow(&self) -> &[u8] {
+		self.as_bytes()
+	}
+}
+
+impl AsRef<[u8]> for PctStr {
+	fn as_ref(&self) -> &[u8] {
+		self.as_bytes()
 	}
 }
 
@@ -467,24 +513,49 @@ pub trait Encoder {
 	fn encode(&self, c: char) -> bool;
 }
 
+impl<F: Fn(char) -> bool> Encoder for F {
+	fn encode(&self, c: char) -> bool {
+		self(c)
+	}
+}
+
 /// Owned, mutable percent-encoded string.
 ///
 /// This is the equivalent of [`String`] for percent-encoded strings.
 /// It implements [`Deref`](`std::ops::Deref`) to [`PctStr`] meaning that all methods on [`PctStr`] slices are
 /// available on `PctString` values as well.
-pub struct PctString {
-	data: String,
-}
+pub struct PctString(Vec<u8>);
 
 impl PctString {
 	/// Create a new owned percent-encoded string.
 	///
-	/// The input slice is checked for correct percent-encoding and copied.
-	/// If the test fails, a [`InvalidEncoding`] error is returned.
-	pub fn new<S: AsRef<str> + ?Sized>(str: &S) -> Result<PctString> {
-		Ok(Self {
-			data: PctStr::new(str)?.data.to_string(),
+	/// The input string is checked for correct percent-encoding.
+	/// If the test fails, a [`InvalidPctString`] error is returned.
+	pub fn new<B: Into<Vec<u8>>>(bytes: B) -> Result<Self, InvalidPctString<Vec<u8>>> {
+		let bytes = bytes.into();
+		if PctStr::validate(bytes.iter().copied()) {
+			Ok(Self(bytes))
+		} else {
+			Err(InvalidPctString(bytes))
+		}
+	}
+
+	pub fn from_string(string: String) -> Result<Self, InvalidPctString<String>> {
+		Self::new(string).map_err(|e| {
+			e.map(|bytes| unsafe {
+				// SAFETY: the bytes come from the UTF-8 encoded input `string`.
+				String::from_utf8_unchecked(bytes)
+			})
 		})
+	}
+
+	/// Creates a new owned percent-encoded string without validation.
+	///
+	/// # Safety
+	///
+	/// The input string must be correctly percent-encoded.
+	pub unsafe fn new_unchecked<B: Into<Vec<u8>>>(bytes: B) -> Self {
+		Self(bytes.into())
 	}
 
 	/// Encode a string into a percent-encoded string.
@@ -502,7 +573,7 @@ impl PctString {
 	/// let pct_string = PctString::encode("Hello World!".chars(), URIReserved);
 	/// println!("{}", pct_string.as_str()); // => Hello World%21
 	/// ```
-	pub fn encode<I: Iterator<Item = char>, E: Encoder>(src: I, encoder: E) -> PctString {
+	pub fn encode<E: Encoder>(src: impl Iterator<Item = char>, encoder: E) -> PctString {
 		use std::fmt::Write;
 
 		let mut buf = String::with_capacity(4);
@@ -519,19 +590,31 @@ impl PctString {
 			}
 		}
 
-		PctString { data: encoded }
+		PctString(encoded.into_bytes())
 	}
 
 	/// Return this string as a borrowed percent-encoded string slice.
 	#[inline]
 	pub fn as_pct_str(&self) -> &PctStr {
-		unsafe { PctStr::new_unchecked(&self.data) }
+		unsafe {
+			// SAFETY: the bytes have been validated.
+			PctStr::new_unchecked(&self.0)
+		}
 	}
 
 	/// Return the internal string of the [`PctString`], consuming it
 	#[inline]
 	pub fn into_string(self) -> String {
-		self.data
+		unsafe {
+			// SAFETY: the bytes have been validated, and a percent-encoded
+			//         string is a valid UTF-8 string.
+			String::from_utf8_unchecked(self.0)
+		}
+	}
+
+	#[inline]
+	pub fn into_bytes(self) -> Vec<u8> {
+		self.0
 	}
 }
 
@@ -541,6 +624,42 @@ impl std::ops::Deref for PctString {
 	#[inline]
 	fn deref(&self) -> &PctStr {
 		self.as_pct_str()
+	}
+}
+
+impl Borrow<PctStr> for PctString {
+	fn borrow(&self) -> &PctStr {
+		self.as_pct_str()
+	}
+}
+
+impl AsRef<PctStr> for PctString {
+	fn as_ref(&self) -> &PctStr {
+		self.as_pct_str()
+	}
+}
+
+impl Borrow<str> for PctString {
+	fn borrow(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl AsRef<str> for PctString {
+	fn as_ref(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl Borrow<[u8]> for PctString {
+	fn borrow(&self) -> &[u8] {
+		self.as_bytes()
+	}
+}
+
+impl AsRef<[u8]> for PctString {
+	fn as_ref(&self) -> &[u8] {
+		self.as_bytes()
 	}
 }
 
@@ -647,33 +766,33 @@ impl fmt::Debug for PctString {
 }
 
 impl FromStr for PctString {
-	type Err = InvalidEncoding;
+	type Err = InvalidPctString<String>;
 
-	fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-		Self::new(s)
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		Self::from_string(s.to_string())
 	}
 }
 
 impl TryFrom<String> for PctString {
-	type Error = InvalidEncoding;
+	type Error = InvalidPctString<String>;
 
-	fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
-		value.parse()
+	fn try_from(value: String) -> Result<Self, Self::Error> {
+		Self::from_string(value)
 	}
 }
 
-impl TryFrom<&str> for PctString {
-	type Error = InvalidEncoding;
+impl<'a> TryFrom<&'a str> for PctString {
+	type Error = InvalidPctString<String>;
 
-	fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
-		value.parse()
+	fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+		Self::from_string(value.to_owned())
 	}
 }
 
 impl<'a> TryFrom<&'a str> for &'a PctStr {
-	type Error = InvalidEncoding;
+	type Error = InvalidPctString<&'a str>;
 
-	fn try_from(value: &'a str) -> std::result::Result<Self, Self::Error> {
+	fn try_from(value: &'a str) -> Result<Self, Self::Error> {
 		PctStr::new(value)
 	}
 }
